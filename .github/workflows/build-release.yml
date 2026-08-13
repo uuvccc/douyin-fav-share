@@ -1,0 +1,91 @@
+name: Build & Auto-Release APK
+
+# 每次 push（以及手动触发）都会触发构建并发布 Release
+on:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+# 需要写权限以创建 Release 并上传附件
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --console=plain
+
+      - name: Build Release APK
+        run: ./gradlew assembleRelease --console=plain
+
+      - name: Sign release APK with a generated keystore
+        run: |
+          # 生成临时 keystore（仅用于让 release APK 可直接安装）
+          keytool -genkeypair -v -keystore "$RUNNER_TEMP/release.jks" \
+            -storepass douyinfavshare -alias douyin -keypass douyinfavshare \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -dname "CN=Douyin Fav Share, O=Personal, C=CN"
+
+          # 使用最新的 build-tools
+          BT=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* | sort -V | tail -1)
+          echo "Using build-tools: $BT"
+
+          # zipalign + apksigner 签名
+          "$BT/zipalign" -f 4 \
+            app/build/outputs/apk/release/app-release-unsigned.apk \
+            "$RUNNER_TEMP/aligned.apk"
+          "$BT/apksigner" sign \
+            --ks "$RUNNER_TEMP/release.jks" \
+            --ks-pass pass:douyinfavshare \
+            --key-pass pass:douyinfavshare \
+            --out app/build/outputs/apk/release/app-release.apk \
+            "$RUNNER_TEMP/aligned.apk"
+
+      - name: Generate checksums
+        run: |
+          cd app/build/outputs/apk
+          sha256sum debug/app-debug.apk release/app-release.apk > "$RUNNER_TEMP/SHA256SUMS.txt"
+          cat "$RUNNER_TEMP/SHA256SUMS.txt"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_id }}
+          name: Build #${{ github.run_id }} (${{ github.ref_name }})
+          body: |
+            ## 自动构建 Release
+
+            - **Commit**: `${{ github.sha }}`
+            - **分支**: `${{ github.ref_name }}`
+            - **触发者**: @${{ github.actor }}
+
+            ### APK 附件
+            - `app-debug.apk` — Debug 构建（自动签名，可直接安装）
+            - `app-release.apk` — Release 构建（CI 生成的密钥签名，可直接安装）
+            - `SHA256SUMS.txt` — 校验和
+
+            > 每次 push 自动生成，Release 名称按构建序号递增。
+          files: |
+            app/build/outputs/apk/debug/app-debug.apk
+            app/build/outputs/apk/release/app-release.apk
+            ${{ runner.temp }}/SHA256SUMS.txt
+          fail_on_unmatched_files: true
