@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+
+    <!-- 主题色（抖音品牌红） -->
+    <color name="brand_primary">#FE2C55</color>
+
+    <!-- 状态色 -->
+    <color name="status_ok">#16A34A</color>
+    <color name="status_pending">#F59E0B</color>
+    <color name="status_error">#DC2626</color>
+</resources>
