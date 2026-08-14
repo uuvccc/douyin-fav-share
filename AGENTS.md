@@ -44,13 +44,23 @@ GET https://www.douyin.com/aweme/v1/web/aweme/listcollection/
 
 ```
 app/src/main/java/com/example/myapplication/
-├── MainActivity.kt         # 主界面：三卡片（登录/抓取/分享）+ 随机分享 + 导入 Cookie
+├── MainActivity.kt         # 主界面：三卡片（登录/抓取/分享）+ 随机分享 + 导入 Cookie + 自动更新
 ├── LoginActivity.kt        # WebView 登录，检测 sessionid 并提取 Cookie
 ├── FetchActivity.kt        # WebView 打开收藏页，JS hook + 自动滚动翻页抓取
+├── update/
+│   └── UpdateManager.kt    # 自动更新：GitHub API 检测 + 镜像下载 + 系统安装
 └── data/
     ├── FavoriteItem.kt     # 收藏视频模型（字段与 douyin-tools/favorites.json 兼容）
     └── SettingsStore.kt    # 本地持久化（SharedPreferences：Cookie + 收藏列表）
 ```
+
+## 自动更新机制
+
+- 版本来源：GitHub Release 标签 `build-<run_id>`；CI 构建时通过 `-PCI_BUILD_ID=<run_id>` 注入 `BuildConfig.CI_BUILD_ID`（本地构建为 0）。
+- 检测逻辑：`BuildConfig.CI_BUILD_ID` 为 0（本地开发版）或小于服务器 build id → 提示更新；启动时仅 CI 构建自动静默检查，菜单「检查更新」随时手动检查。
+- 下载加速：`UpdateManager.mirrors` 内置多个公开 GitHub 代理/镜像（gh-proxy.com、ghfast.top 等），先直连失败后逐个重试；镜像失效时可增删该列表。
+- 安装：`FileProvider`（`filesDir/updates/`）+ 系统安装器；Manifest 已声明 `REQUEST_INSTALL_PACKAGES` 与包可见性 `<queries>`。
+- 升级注意：CI 每次生成的签名密钥不同，覆盖安装需卸载重装（见下「构建」）。
 
 技术栈：Kotlin + ViewBinding + Material 3，单 Activity 多屏（`LoginActivity` / `FetchActivity` 为独立 Activity，通过 `ActivityResultLauncher` 联动）。
 

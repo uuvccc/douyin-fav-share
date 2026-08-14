@@ -31,11 +31,12 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
+      # 注入 CI_BUILD_ID（= run_id），App 内通过 BuildConfig 对比判断是否有新版本
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --console=plain
+        run: ./gradlew assembleDebug --console=plain -PCI_BUILD_ID=${{ github.run_id }}
 
       - name: Build Release APK
-        run: ./gradlew assembleRelease --console=plain
+        run: ./gradlew assembleRelease --console=plain -PCI_BUILD_ID=${{ github.run_id }}
 
       - name: Sign release APK with a generated keystore
         run: |

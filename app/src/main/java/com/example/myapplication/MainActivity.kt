@@ -6,7 +6,13 @@ import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.text.InputType
+import android.view.Menu
+import android.view.MenuItem
+import android.view.ViewGroup
 import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.ProgressBar
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
@@ -15,6 +21,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.example.myapplication.data.SettingsStore
 import com.example.myapplication.databinding.ActivityMainBinding
+import com.example.myapplication.update.UpdateManager
 import org.json.JSONObject
 
 /**
@@ -24,11 +31,19 @@ import org.json.JSONObject
  *    生成的 douyin_cookies.txt 内容粘贴导入）。
  * 2. 抓取：WebView 打开收藏页，自动滚动翻页并捕获收藏列表。
  * 3. 分享：从收藏中随机选一条，复制链接到剪贴板。
+ *
+ * 自动更新：启动时（仅 CI 构建）与菜单手动触发都会检查 GitHub Release，
+ * 有新版本则提示下载（走公开镜像加速）并拉起系统安装器。
  */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var store: SettingsStore
+    private lateinit var updateManager: UpdateManager
+
+    private var progressDialog: AlertDialog? = null
+    private var progressBar: ProgressBar? = null
+    private var progressText: TextView? = null
 
     private val loginLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
@@ -45,6 +60,9 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         store = SettingsStore(this)
+        updateManager = UpdateManager(applicationContext)
+
+        setSupportActionBar(binding.toolbar)
 
         ViewCompat.setOnApplyWindowInsetsListener(binding.root) { v, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
@@ -64,6 +82,26 @@ class MainActivity : AppCompatActivity() {
             fetchLauncher.launch(Intent(this, FetchActivity::class.java))
         }
         binding.btnShare.setOnClickListener { shareRandom() }
+
+        // 自动检查更新：仅对 CI 构建生效（本地开发版跳过，避免打扰）
+        if (BuildConfig.CI_BUILD_ID > 0L) {
+            binding.toolbar.postDelayed({ checkForUpdates(manual = false) }, 3000)
+        }
+    }
+
+    override fun onCreateOptionsMenu(menu: Menu): Boolean {
+        menuInflater.inflate(R.menu.menu_main, menu)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        return when (item.itemId) {
+            R.id.action_check_update -> {
+                checkForUpdates(manual = true)
+                true
+            }
+            else -> super.onOptionsItemSelected(item)
+        }
     }
 
     override fun onResume() {
@@ -126,6 +164,106 @@ class MainActivity : AppCompatActivity() {
         }
         Toast.makeText(this, "已复制链接到剪贴板", Toast.LENGTH_SHORT).show()
     }
+
+    // ------------------------------------------------------------------
+    // 自动更新
+    // ------------------------------------------------------------------
+
+    private fun checkForUpdates(manual: Boolean) {
+        updateManager.checkLatest(
+            onResult = { hasUpdate, info ->
+                if (hasUpdate && info != null) {
+                    showUpdateDialog(info)
+                } else if (manual) {
+                    Toast.makeText(this, "已是最新版本", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onError = { msg ->
+                if (manual) {
+                    Toast.makeText(this, "检查更新失败：$msg", Toast.LENGTH_SHORT).show()
+                }
+            }
+        )
+    }
+
+    private fun showUpdateDialog(info: UpdateManager.ReleaseInfo) {
+        val body = info.body.trim().take(600)
+        AlertDialog.Builder(this)
+            .setTitle("发现新版本 ${info.tag}")
+            .setMessage(
+                buildString {
+                    if (body.isNotEmpty()) {
+                        append(body)
+                    } else {
+                        append("检测到新版本，是否下载更新？")
+                    }
+                }
+            )
+            .setPositiveButton("下载更新") { _, _ -> startDownload(info) }
+            .setNegativeButton("稍后", null)
+            .show()
+    }
+
+    private fun startDownload(info: UpdateManager.ReleaseInfo) {
+        showProgressDialog()
+        updateManager.downloadAndInstall(info, object : UpdateManager.Listener {
+            override fun onDownloadProgress(percent: Int) {
+                progressBar?.progress = percent
+                progressText?.text = "$percent%"
+            }
+
+            override fun onDownloadDone(file: java.io.File) {
+                dismissProgressDialog()
+                Toast.makeText(this@MainActivity, "下载完成，正在安装…", Toast.LENGTH_SHORT).show()
+                updateManager.install(file)
+            }
+
+            override fun onDownloadError(message: String) {
+                dismissProgressDialog()
+                Toast.makeText(this@MainActivity, "下载失败：$message", Toast.LENGTH_LONG).show()
+            }
+        })
+    }
+
+    private fun showProgressDialog() {
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(20), dp(24), dp(8))
+        }
+        progressText = TextView(this).apply {
+            text = "0%"
+            textSize = 13f
+        }
+        progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+        }
+        layout.addView(progressText)
+        layout.addView(
+            progressBar,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(8) }
+        )
+        progressDialog = AlertDialog.Builder(this)
+            .setTitle("正在下载更新…")
+            .setView(layout)
+            .setCancelable(false)
+            .show()
+    }
+
+    private fun dismissProgressDialog() {
+        progressDialog?.dismiss()
+        progressDialog = null
+        progressBar = null
+        progressText = null
+    }
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    // ------------------------------------------------------------------
+    // Cookie 导入
+    // ------------------------------------------------------------------
 
     /**
      * 导入 Cookie：粘贴 PC 端 douyin-tools 生成的 douyin_cookies.txt 内容
