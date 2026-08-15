@@ -38,17 +38,36 @@ jobs:
       - name: Build Release APK
         run: ./gradlew assembleRelease --console=plain -PCI_BUILD_ID=${{ github.run_id }}
 
-      - name: Sign release APK with a generated keystore
+      # 签名：优先使用 Secrets 中固定的 release keystore（支持覆盖安装升级）；
+      # 未配置 Secrets 时回退为临时 keystore（每次构建签名不同，需卸载重装）。
+      - name: Sign release APK
+        shell: bash
+        env:
+          KS_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.RELEASE_KEYSTORE_PASS }}
+          KS_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          KS_KEY_PASS: ${{ secrets.RELEASE_KEY_PASS }}
         run: |
-          # 生成临时 keystore（仅用于让 release APK 可直接安装）
-          keytool -genkeypair -v -keystore "$RUNNER_TEMP/release.jks" \
-            -storepass douyinfavshare -alias douyin -keypass douyinfavshare \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=Douyin Fav Share, O=Personal, C=CN"
-
           # 使用最新的 build-tools
           BT=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* | sort -V | tail -1)
           echo "Using build-tools: $BT"
+
+          if [ -n "$KS_B64" ]; then
+            echo "Using fixed release keystore from Secrets"
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            KS_PASS=${KS_PASS:-douyinfavshare}
+            KS_ALIAS=${KS_ALIAS:-douyin}
+            KS_KEY_PASS=${KS_KEY_PASS:-$KS_PASS}
+          else
+            echo "No RELEASE_KEYSTORE_B64 secret, generating a temporary keystore"
+            keytool -genkeypair -v -keystore "$RUNNER_TEMP/release.jks" \
+              -storepass douyinfavshare -alias douyin -keypass douyinfavshare \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Douyin Fav Share, O=Personal, C=CN"
+            KS_PASS=douyinfavshare
+            KS_ALIAS=douyin
+            KS_KEY_PASS=douyinfavshare
+          fi
 
           # zipalign + apksigner 签名
           "$BT/zipalign" -f 4 \
@@ -56,8 +75,9 @@ jobs:
             "$RUNNER_TEMP/aligned.apk"
           "$BT/apksigner" sign \
             --ks "$RUNNER_TEMP/release.jks" \
-            --ks-pass pass:douyinfavshare \
-            --key-pass pass:douyinfavshare \
+            --ks-pass "pass:${KS_PASS}" \
+            --ks-key-alias "${KS_ALIAS}" \
+            --key-pass "pass:${KS_KEY_PASS}" \
             --out app/build/outputs/apk/release/app-release.apk \
             "$RUNNER_TEMP/aligned.apk"
 
