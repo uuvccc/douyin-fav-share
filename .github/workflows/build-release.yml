@@ -54,7 +54,8 @@ jobs:
 
           if [ -n "$KS_B64" ]; then
             echo "Using fixed release keystore from Secrets"
-            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            # 清理可能混入的 CR/LF（Windows 管道设置 Secret 时常见），再解码
+            printf '%s' "$KS_B64" | tr -d '\r\n' | base64 -d > "$RUNNER_TEMP/release.jks"
             KS_PASS=${KS_PASS:-douyinfavshare}
             KS_ALIAS=${KS_ALIAS:-douyin}
             KS_KEY_PASS=${KS_KEY_PASS:-$KS_PASS}
