@@ -17,3 +17,5 @@ local.properties
 *.jks
 *.keystore
 *.jks.b64
+# 临时探查脚本
+.probe/
