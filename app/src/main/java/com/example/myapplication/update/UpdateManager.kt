@@ -98,7 +98,7 @@ class UpdateManager(private val appContext: Context) {
             if (conn.responseCode != 200) return null
             val o = JSONObject(conn.inputStream.bufferedReader().readText())
             val tag = o.optString("tag_name")
-            val buildId = tag.filter { it.isDigit() }.toLongOrNull() ?: 0L
+            val buildId = buildIdFromTag(tag)
             if (buildId <= 0L) return null
 
             val assets = o.optJSONArray("assets")
@@ -197,5 +197,15 @@ class UpdateManager(private val appContext: Context) {
     companion object {
         private const val API_URL =
             "https://api.github.com/repos/uuvccc/douyin-fav-share/releases/latest"
+
+        /**
+         * 从 GitHub Release 标签解析 build id（纯函数，便于单元测试）。
+         *
+         * 标签格式为 `build-<run_id>`，例如 `build-31874493132`；仅取其中的数字部分。
+         * 兼容形如 `v1.2.3-build-42` 或 `build-abc-123` 的变体——只保留数字。
+         * 解析不出正数时返回 0。
+         */
+        fun buildIdFromTag(tag: String?): Long =
+            tag?.filter { it.isDigit() }?.takeIf { it.isNotEmpty() }?.toLongOrNull() ?: 0L
     }
 }

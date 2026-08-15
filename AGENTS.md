@@ -57,10 +57,11 @@ app/src/main/java/com/example/myapplication/
 ## 自动更新机制
 
 - 版本来源：GitHub Release 标签 `build-<run_id>`；CI 构建时通过 `-PCI_BUILD_ID=<run_id>` 注入 `BuildConfig.CI_BUILD_ID`（本地构建为 0）。
+- versionCode：CI 通过 `-PCI_VERSION_CODE=<run_number>` 注入（run_number 严格递增的小整数，保证每次 Release 版本号必然增大，可覆盖安装）。**不要**用 `CI_BUILD_ID.toInt()`（run_id 是超大数，截断为低 32 位可能变负数或不单调）。
 - 检测逻辑：`BuildConfig.CI_BUILD_ID` 为 0（本地开发版）或小于服务器 build id → 提示更新；启动时仅 CI 构建自动静默检查，菜单「检查更新」随时手动检查。
 - 下载加速：`UpdateManager.mirrors` 内置多个公开 GitHub 代理/镜像（gh-proxy.com、ghfast.top 等），先直连失败后逐个重试；镜像失效时可增删该列表。
 - 安装：`FileProvider`（`filesDir/updates/`）+ 系统安装器；Manifest 已声明 `REQUEST_INSTALL_PACKAGES` 与包可见性 `<queries>`。
-- 升级注意：CI 每次生成的签名密钥不同，覆盖安装需卸载重装（见下「构建」）。
+- 升级注意：配置了 `RELEASE_KEYSTORE_B64` 等 Secrets 时签名固定，可覆盖安装；未配置时 CI 每次生成的签名密钥不同，覆盖安装需卸载重装（见下「构建」）。
 
 技术栈：Kotlin + ViewBinding + Material 3，单 Activity 多屏（`LoginActivity` / `FetchActivity` 为独立 Activity，通过 `ActivityResultLauncher` 联动）。
 
@@ -73,7 +74,7 @@ FetchActivity 支持两种模式（`EXTRA_MODE`，默认 `self`）：
   - 完整主页链接 `douyin.com/user/{sec_uid}` → 直接提取 sec_uid；
   - `v.douyin.com` 短链 → 先加载，`onPageFinished` 后从最终 URL 提取 sec_uid；
   - 用户 ID（sec_uid）→ 直接使用；
-  - 抖音号 → 打开 `douyin.com/search/{抖音号}`，注入 `RESOLVE_JS` 从 DOM 提取第一个用户卡片链接的 sec_uid。
+  - 抖音号 → 打开 `douyin.com/search/{抖音号}`，**主路径是注入 `RESOLVE_HOOK_JS` 捕获搜索接口响应 JSON（`user_list[].user_info.sec_uid`，不依赖 DOM）**；`RESOLVE_JS` 从 DOM 提取用户卡片链接仅作兜底，找不到时点击「用户」筛选 tab 触发新的搜索请求。
   - 仅当对方开启「公开收藏」时才有数据；收藏 tab 通过 URL 参数 `showTab=favorite_collection` 激活。
   - **注意**：即使公开收藏，接口仍带 `a_bogus` 签名，所以同样必须走 WebView，只是不需要登录态。
 
@@ -90,8 +91,28 @@ FetchActivity 支持两种模式（`EXTRA_MODE`，默认 `self`）：
 - **Cookie 是敏感数据**：仅保存在本机应用私有 SharedPreferences，禁止上传/日志输出；`allowBackup=false` 防止备份泄露。guest 模式明确清空 CookieManager，保证「免登录」语义。
 - 必须使用 **桌面 UA**（`Chrome/124 Windows`），保证收藏 tab 与接口存在于页面中。
 - `addJavascriptInterface` 必须在 `loadUrl` 之前调用。
-- 抖音页面结构/接口可能变化，`FetchActivity` 中的 JS（`HOOK_JS`、`DOM_SEED_JS`、`RESOLVE_JS`、`SCROLL_JS`）是失效时优先排查对象。
+- 抖音页面结构/接口可能变化，`FetchActivity` 中的 JS（`HOOK_JS`、`DOM_SEED_JS`、`RESOLVE_HOOK_JS`、`RESOLVE_JS`、`SCROLL_JS`）是失效时优先排查对象。
 - 修改涉及收藏抓取的逻辑时，先对照 douyin-tools 的 Python 实现确认接口行为。
+
+## 测试
+
+两类自动化测试，CI（`.github/workflows/build-release.yml`）在构建前自动执行，失败即中断发布：
+
+1. **JVM 单元测试**（`app/src/test/`，JUnit4 + Robolectric）
+   ```bash
+   ./gradlew.bat testDebugUnitTest
+   ```
+   - 覆盖：`LoginActivity.parseCookies`、`FavoriteItem` JSON 序列化、`SettingsStore`（Robolectric 模拟 SharedPreferences）、`GuestInputParser`（访客输入解析）、`UpdateManager.buildIdFromTag`。
+   - `GuestInputParser` 是把 `FetchActivity` 里的 sec_uid 提取/URL 解析/ DOM 解析逻辑抽出的纯对象，改解析逻辑时同步改这里。
+   - **注意**：Robolectric 不支持 JDK 25（Android Studio 自带 JBR）。`app/build.gradle.kts` 里已用 `tasks.withType<Test> { javaLauncher = Java 17 }` 把单测固定跑在 Java 17 工具链（Gradle 通过 foojay 自动获取），勿回退。
+
+2. **JS 注入脚本测试**（`js-tests/`，Python + Node）
+   ```bash
+   bash js-tests/run_js_tests.sh   # = python3 extract_js.py && node test_hooks.js
+   ```
+   - `extract_js.py` 从 `FetchActivity.kt` 提取全部 5 个 JS 常量（`HOOK_JS`/`DOM_SEED_JS`/`RESOLVE_HOOK_JS`/`RESOLVE_JS`/`SCROLL_JS`）到 `js-tests/build/`（该目录已 gitignore，不入库）。
+   - `test_hooks.js` 做语法检查 + 行为验证（listcollection 捕获的 fetch/XHR 两条路径、sec_uid 解析、DOM 提取、用户 tab 点击、滚动翻页）。
+   - **改任何 JS 常量后务必重跑**，否则语法/行为回归不会被发现。
 
 ## 构建
 

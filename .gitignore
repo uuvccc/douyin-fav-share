@@ -19,3 +19,5 @@ local.properties
 *.jks.b64
 # 临时探查脚本
 .probe/
+# JS 测试的构建产物（由 extract_js.py 生成）
+/js-tests/build/

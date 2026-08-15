@@ -14,6 +14,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.example.myapplication.data.FavoriteItem
+import com.example.myapplication.data.GuestInputParser
 import com.example.myapplication.data.SettingsStore
 import com.example.myapplication.databinding.ActivityFetchBinding
 import org.json.JSONArray
@@ -98,6 +99,15 @@ class FetchActivity : AppCompatActivity() {
 
         // 页面加载完成后：注入 hook -> 提取首屏 DOM 兜底 -> 开始滚动翻页
         binding.webView.webViewClient = object : WebViewClient() {
+            override fun onPageCommitVisible(view: WebView?, url: String?) {
+                super.onPageCommitVisible(view, url)
+                // 访客模式待解析：新页面一提交就注入「搜索接口响应 hook」，
+                // 争取在页面自身发起搜索请求前挂上监听（搜索结果是 JSON，不依赖 DOM 渲染）。
+                if (guestMode && guestResolving) {
+                    binding.webView.evaluateJavascript(RESOLVE_HOOK_JS, null)
+                }
+            }
+
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 // 访客模式待解析：先尝试从当前页解析 sec_uid，再进入收藏页
@@ -157,23 +167,7 @@ class FetchActivity : AppCompatActivity() {
     }
 
     /** 从输入中提取 sec_uid；无法确定时返回 null。 */
-    private fun extractSecUid(input: String): String? {
-        // 主页链接：douyin.com/user/{secUid}
-        Regex("douyin\\.com/user/([A-Za-z0-9_\\-]+)").find(input)?.let {
-            val id = it.groupValues[1]
-            if (id != "self") return id
-        }
-        // 特征明显的 sec_uid（通常含 MS4wLjAB 或较长）
-        if (input.contains("MS4wLjAB") ||
-            (input.length >= 24 && Regex("^[A-Za-z0-9_\\-]+$").matches(input))
-        ) {
-            return input
-        }
-        // 注意：纯数字（如 54132528295）是 uid/抖音号，不是 sec_uid。
-        // douyin.com/user/{id} 只接受 sec_uid，直接用纯数字会打开「用户不存在」页，
-        // 因此不能在这里直接返回，必须走搜索页解析。
-        return null
-    }
+    private fun extractSecUid(input: String): String? = GuestInputParser.extractSecUid(input)
 
     /** 打开用户主页的「收藏」Tab。 */
     private fun loadGuestProfile(secUid: String) {
@@ -198,19 +192,18 @@ class FetchActivity : AppCompatActivity() {
     private fun resolveGuestFromPage(currentUrl: String?) {
         if (finished || !guestResolving) return
         // 1) 当前 URL 已是用户主页
-        Regex("douyin\\.com/user/([A-Za-z0-9_\\-]+)").find(currentUrl ?: "")?.let {
-            val id = it.groupValues[1]
-            if (id != "self") {
-                guestResolving = false
-                loadGuestProfile(id)
-                return
-            }
+        GuestInputParser.secUidFromUrl(currentUrl)?.let { id ->
+            guestResolving = false
+            loadGuestProfile(id)
+            return
         }
-        // 2) 从页面 DOM 提取用户卡片链接（搜索页场景）
+        // 2) 确保「搜索接口响应 hook」已挂上：直接从 search 接口 JSON 提取 sec_uid，
+        //    不依赖 DOM 渲染（搜索结果是 SPA 懒加载，DOM 提取可能一直等不到）。
+        binding.webView.evaluateJavascript(RESOLVE_HOOK_JS, null)
+        // 3) 从页面 DOM 提取用户卡片链接（兜底）
         binding.webView.evaluateJavascript(RESOLVE_JS) { value ->
             if (finished || !guestResolving) return@evaluateJavascript
-            val secUid = Regex("\"secUid\"\\s*:\\s*\"([^\"]+)\"").find(value ?: "")
-                ?.groupValues?.get(1)
+            val secUid = GuestInputParser.secUidFromDomValue(value)
             if (!secUid.isNullOrEmpty()) {
                 guestResolving = false
                 loadGuestProfile(secUid)
@@ -245,6 +238,17 @@ class FetchActivity : AppCompatActivity() {
         @JavascriptInterface
         fun onCollection(json: String) {
             runOnUiThread { handleCollection(json) }
+        }
+
+        /** 搜索接口 hook 找到用户后回调 sec_uid（访客模式解析）。 */
+        @JavascriptInterface
+        fun onResolved(secUid: String) {
+            runOnUiThread {
+                if (finished || !guestResolving || secUid.isBlank()) return@runOnUiThread
+                guestResolving = false
+                handler.removeCallbacksAndMessages(null)
+                loadGuestProfile(secUid)
+            }
         }
     }
 
@@ -463,6 +467,78 @@ class FetchActivity : AppCompatActivity() {
                     if (m && ids.indexOf(m[1]) === -1) ids.push(m[1]);
                 }
                 return {ids: ids};
+            })();
+        """
+
+        /**
+         * 搜索接口响应 hook：捕获页面内 fetch / XHR 中返回 user_list 的搜索接口，
+         * 直接从 JSON 提取第一个用户的 sec_uid，经 DyBridge.onResolved 回传原生层。
+         *
+         * 为什么不用纯 DOM 提取？搜索页是 SPA，结果由页面自身发起搜索请求后异步渲染，
+         * DOM 结构不固定且首屏可能不渲染用户卡片；而搜索接口响应 JSON 恒含
+         * user_list[].user_info.sec_uid，只要 hook 在请求前挂上就一定能拿到。
+         * 与抓收藏 listcollection 的 HOOK_JS 是同一套「监听页面自身请求」的思路。
+         */
+        private const val RESOLVE_HOOK_JS = """
+            (function() {
+                if (window.__dyResolveHooked) return;
+                window.__dyResolveHooked = true;
+
+                function extractUser(body) {
+                    var data = (body && body.data) || body;
+                    var ul = data && (data.user_list || data.users);
+                    if (ul && ul.length) {
+                        for (var i = 0; i < ul.length; i++) {
+                            var info = (ul[i] && (ul[i].user_info || ul[i])) || null;
+                            if (info && info.sec_uid) return info.sec_uid;
+                        }
+                    }
+                    return '';
+                }
+
+                function onBody(body) {
+                    try {
+                        if (!body || typeof body !== 'object' || window.__dyResolved) return;
+                        var secUid = extractUser(body);
+                        if (secUid) {
+                            window.__dyResolved = true;
+                            if (window.DyBridge && window.DyBridge.onResolved) {
+                                window.DyBridge.onResolved(secUid);
+                            }
+                        }
+                    } catch (e) {}
+                }
+
+                var origFetch = window.fetch;
+                if (typeof origFetch === 'function') {
+                    window.fetch = function() {
+                        var p = origFetch.apply(this, arguments);
+                        if (p && typeof p.then === 'function') {
+                            p.then(function(resp) {
+                                try {
+                                    resp.clone().text().then(function(t) {
+                                        try { onBody(JSON.parse(t)); } catch (e) {}
+                                    });
+                                } catch (e) {}
+                            });
+                        }
+                        return p;
+                    };
+                }
+
+                var origOpen = XMLHttpRequest.prototype.open;
+                XMLHttpRequest.prototype.open = function(method, url) {
+                    this.__dyUrl = url;
+                    return origOpen.apply(this, arguments);
+                };
+                var origSend = XMLHttpRequest.prototype.send;
+                XMLHttpRequest.prototype.send = function() {
+                    var self = this;
+                    this.addEventListener('load', function() {
+                        try { onBody(JSON.parse(self.responseText)); } catch (e) {}
+                    });
+                    return origSend.apply(this, arguments);
+                };
             })();
         """
 

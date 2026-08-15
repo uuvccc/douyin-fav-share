@@ -141,7 +141,8 @@ class LoginActivity : AppCompatActivity() {
             val map = LinkedHashMap<String, String>()
             s.split(";").forEach { part ->
                 val kv = part.trim().split("=", limit = 2)
-                if (kv.size == 2 && kv[0].isNotBlank()) map[kv[0]] = kv[1]
+                // 键和值分别 trim，避免 "sessionid = abc " 这类带空格的 Cookie 得到错误键名/值
+                if (kv.size == 2 && kv[0].isNotBlank()) map[kv[0].trim()] = kv[1].trim()
             }
             return map
         }

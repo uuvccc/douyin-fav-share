@@ -31,12 +31,23 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x gradlew
 
-      # 注入 CI_BUILD_ID（= run_id），App 内通过 BuildConfig 对比判断是否有新版本
+      # ---- 自动化测试（测试失败则中断，不进入构建/发布）----
+      - name: Run JVM unit tests
+        run: ./gradlew testDebugUnitTest --console=plain -PCI_BUILD_ID=${{ github.run_id }} -PCI_VERSION_CODE=${{ github.run_number }}
+
+      # 校验 FetchActivity 内嵌的 JS 注入脚本（语法 + 行为）。
+      # ubuntu-latest 自带 python3 与 node。
+      - name: Run JS hook tests
+        run: bash js-tests/run_js_tests.sh
+
+      # 注入 CI_BUILD_ID（= run_id，更新检测用）与 CI_VERSION_CODE（= run_number，versionCode 用）。
+      # run_number 严格递增且为小整数，保证每次 Release 的 versionCode 必然增大，
+      # 否则新版 APK（固定密钥签名）因版本号不递增仍无法覆盖安装。
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --console=plain -PCI_BUILD_ID=${{ github.run_id }}
+        run: ./gradlew assembleDebug --console=plain -PCI_BUILD_ID=${{ github.run_id }} -PCI_VERSION_CODE=${{ github.run_number }}
 
       - name: Build Release APK
-        run: ./gradlew assembleRelease --console=plain -PCI_BUILD_ID=${{ github.run_id }}
+        run: ./gradlew assembleRelease --console=plain -PCI_BUILD_ID=${{ github.run_id }} -PCI_VERSION_CODE=${{ github.run_number }}
 
       # 签名：优先使用 Secrets 中固定的 release keystore（支持覆盖安装升级）；
       # 未配置 Secrets 时回退为临时 keystore（每次构建签名不同，需卸载重装）。
