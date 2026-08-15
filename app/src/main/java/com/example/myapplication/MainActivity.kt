@@ -185,6 +185,9 @@ class MainActivity : AppCompatActivity() {
     /** 输入对方主页链接 / 用户 ID / 抖音号，免登录抓取公开收藏。 */
     private fun showGuestInputDialog() {
         val input = EditText(this).apply {
+            // 默认填入该用户，可直接抓取或改为其他用户
+            setText(DEFAULT_GUEST_UID)
+            setSelection(text.length)
             hint = "粘贴对方主页链接（douyin.com/user/… 或 v.douyin.com 短链）\n" +
                 "或用户 ID / 抖音号"
             inputType = InputType.TYPE_CLASS_TEXT
@@ -350,5 +353,10 @@ class MainActivity : AppCompatActivity() {
         store.saveCookies(map)
         Toast.makeText(this, "已导入 ${map.size} 个 Cookie", Toast.LENGTH_SHORT).show()
         refreshStatus()
+    }
+
+    companion object {
+        /** 访客抓取输入框的默认用户 ID。 */
+        private const val DEFAULT_GUEST_UID = "54132528295"
     }
 }
