@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.Looper
 import androidx.core.content.FileProvider
 import com.example.myapplication.BuildConfig
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
@@ -101,21 +102,8 @@ class UpdateManager(private val appContext: Context) {
             val buildId = buildIdFromTag(tag)
             if (buildId <= 0L) return null
 
-            val assets = o.optJSONArray("assets")
-            var assetName = ""
-            var assetUrl = ""
-            if (assets != null) {
-                for (i in 0 until assets.length()) {
-                    val a = assets.getJSONObject(i)
-                    if (a.optString("name").endsWith(".apk")) {
-                        assetName = a.optString("name")
-                        assetUrl = a.optString("browser_download_url")
-                        break
-                    }
-                }
-            }
-            if (assetUrl.isEmpty()) return null
-            return ReleaseInfo(buildId, tag, assetName, assetUrl, o.optString("body", ""))
+            val picked = pickApkAsset(o.optJSONArray("assets")) ?: return null
+            return ReleaseInfo(buildId, tag, picked.first, picked.second, o.optString("body", ""))
         } finally {
             conn.disconnect()
         }
@@ -207,5 +195,29 @@ class UpdateManager(private val appContext: Context) {
          */
         fun buildIdFromTag(tag: String?): Long =
             tag?.filter { it.isDigit() }?.takeIf { it.isNotEmpty() }?.toLongOrNull() ?: 0L
+
+        /**
+         * 从 GitHub Release 资产里挑出要下载的 APK（纯函数，便于单元测试）。
+         *
+         * 优先选 Release 构建：CI 用仓库 Secrets 里固定的 release keystore 签名，
+         * 签名跨构建稳定，可覆盖安装升级。不能优先 Debug 构建——CI 每次构建都会
+         * 重新生成 debug keystore，签名不稳定，覆盖安装旧版会报
+         * 「软件包与现有软件包存在冲突」(INSTALL_FAILED_UPDATE_INCOMPATIBLE)。
+         *
+         * @return `(assetName, browser_download_url)`；没有任何 apk 时返回 null。
+         */
+        fun pickApkAsset(assets: JSONArray?): Pair<String, String>? {
+            if (assets == null) return null
+            var fallback: Pair<String, String>? = null
+            for (i in 0 until assets.length()) {
+                val a = assets.optJSONObject(i) ?: continue
+                val name = a.optString("name")
+                val url = a.optString("browser_download_url")
+                if (!name.endsWith(".apk") || url.isEmpty()) continue
+                if (name.contains("release")) return name to url
+                if (fallback == null) fallback = name to url
+            }
+            return fallback
+        }
     }
 }

@@ -60,7 +60,9 @@ app/src/main/java/com/example/myapplication/
 - 检测逻辑：`BuildConfig.CI_BUILD_ID` 为 0（本地开发版）或小于服务器 build id → 提示更新；启动时仅 CI 构建自动静默检查，菜单「检查更新」随时手动检查。
 - 下载加速：`UpdateManager.mirrors` 内置多个公开 GitHub 代理/镜像（gh-proxy.com、ghfast.top 等），先直连失败后逐个重试；镜像失效时可增删该列表。
 - 安装：`FileProvider`（`filesDir/updates/`）+ 系统安装器；Manifest 已声明 `REQUEST_INSTALL_PACKAGES` 与包可见性 `<queries>`。
-- 升级注意：CI 每次生成的签名密钥不同，覆盖安装需卸载重装（见下「构建」）。
+- 升级签名：CI 优先用仓库 Secrets 里固定的 release keystore（`RELEASE_KEYSTORE_B64` 等 4 个 Secret）签名，签名跨构建稳定，**可覆盖安装升级**；未配置 Secrets 时才回退为临时 keystore（每次签名不同，需卸载重装）。
+- **下载哪个 APK**：`UpdateManager.pickApkAsset` 优先下载 `app-release.apk`（固定签名），不会下载 `app-debug.apk`——CI 每次构建会重新生成 debug keystore，签名不稳定，覆盖安装会报「软件包与现有软件包存在冲突」。
+- 升级注意：**Secrets 配置前的旧 Release（临时密钥签名）无法直接覆盖升级**，需先卸载重装一次最新 Release（固定签名）后，后续更新才能覆盖安装。
 
 技术栈：Kotlin + ViewBinding + Material 3，单 Activity 多屏（`LoginActivity` / `FetchActivity` 为独立 Activity，通过 `ActivityResultLauncher` 联动）。
 

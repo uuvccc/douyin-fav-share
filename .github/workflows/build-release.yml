@@ -100,6 +100,36 @@ jobs:
             --out app/build/outputs/apk/release/app-release.apk \
             "$RUNNER_TEMP/aligned.apk"
 
+      # Debug 构建也复用同一个固定密钥签名（若 Secrets 已配置）：
+      # 否则用户装了 CI 的 Debug APK 后，更新下载的新 Debug APK（CI 每次重新生成的
+      # debug keystore 签名）与已安装版本签名不一致，会报「软件包与现有软件包存在冲突」。
+      - name: Sign debug APK with fixed key
+        shell: bash
+        env:
+          KS_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.RELEASE_KEYSTORE_PASS }}
+          KS_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          KS_KEY_PASS: ${{ secrets.RELEASE_KEY_PASS }}
+        run: |
+          BT=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* | sort -V | tail -1)
+          if [ -n "$KS_B64" ]; then
+            # 复用上一步生成的固定 release.jks；Debug 与 Release 使用同一签名，
+            # 保证无论装的是哪个构建，后续都能覆盖安装升级
+            "$BT/zipalign" -f 4 \
+              app/build/outputs/apk/debug/app-debug.apk \
+              "$RUNNER_TEMP/aligned-debug.apk"
+            "$BT/apksigner" sign \
+              --ks "$RUNNER_TEMP/release.jks" \
+              --ks-pass "pass:${KS_PASS:-douyinfavshare}" \
+              --ks-key-alias "${KS_ALIAS:-douyin}" \
+              --key-pass "pass:${KS_KEY_PASS:-${KS_PASS:-douyinfavshare}}" \
+              --out app/build/outputs/apk/debug/app-debug.apk \
+              "$RUNNER_TEMP/aligned-debug.apk"
+            echo "Debug APK re-signed with fixed release keystore"
+          else
+            echo "No RELEASE_KEYSTORE_B64 secret; debug APK keeps AGP auto-generated signature"
+          fi
+
       - name: Generate checksums
         run: |
           cd app/build/outputs/apk
@@ -119,8 +149,8 @@ jobs:
             - **触发者**: @${{ github.actor }}
 
             ### APK 附件
-            - `app-debug.apk` — Debug 构建（自动签名，可直接安装）
-            - `app-release.apk` — Release 构建（CI 生成的密钥签名，可直接安装）
+            - `app-debug.apk` — Debug 构建（固定密钥签名，可直接安装）
+            - `app-release.apk` — Release 构建（固定密钥签名，可直接安装）
             - `SHA256SUMS.txt` — 校验和
 
             > 每次 push 自动生成，Release 名称按构建序号递增。
