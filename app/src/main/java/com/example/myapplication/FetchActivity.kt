@@ -1,6 +1,7 @@
 package com.example.myapplication
 
 import android.annotation.SuppressLint
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -41,6 +42,15 @@ class FetchActivity : AppCompatActivity() {
     private var lastCount = 0
     private var domSeeded = false
 
+    /** 访客模式：免登录抓取他人公开收藏。 */
+    private var guestMode = false
+
+    /** 访客模式下是否仍在等待从页面解析 sec_uid。 */
+    private var guestResolving = false
+
+    /** 是否已加载到收藏页（自我收藏页或他人收藏页），可开始抓取。 */
+    private var profileLoaded = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityFetchBinding.inflate(layoutInflater)
@@ -55,11 +65,21 @@ class FetchActivity : AppCompatActivity() {
 
         binding.btnCancel.setOnClickListener { finishFetch(canceled = true) }
         setupWebView()
-        injectCookies()
 
         // 接口对象必须在 loadUrl 之前注入，对所有页面生效
         binding.webView.addJavascriptInterface(Bridge(), "DyBridge")
-        binding.webView.loadUrl(FAVORITES_URL)
+
+        val mode = intent.getStringExtra(EXTRA_MODE) ?: MODE_SELF
+        if (mode == MODE_GUEST) {
+            guestMode = true
+            binding.tvTitle.text = "抓取公开收藏"
+            binding.tvHint.text =
+                "正在打开对方主页的「收藏」Tab 并自动捕获数据…仅限对方开启「公开收藏」，请保持页面可见。"
+            startGuest(intent.getStringExtra(EXTRA_GUEST_INPUT)?.trim().orEmpty())
+        } else {
+            injectCookies()
+            binding.webView.loadUrl(FAVORITES_URL)
+        }
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -74,6 +94,13 @@ class FetchActivity : AppCompatActivity() {
         binding.webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
+                // 访客模式待解析：先尝试从当前页解析 sec_uid，再进入收藏页
+                if (guestMode && guestResolving) {
+                    handler.postDelayed({ resolveGuestFromPage(url) }, 2500)
+                    return
+                }
+                // 收藏页加载完成：注入 hook -> 提取首屏 DOM 兜底 -> 开始滚动翻页
+                if (!profileLoaded) return
                 handler.postDelayed({
                     if (!finished) {
                         injectHook()
@@ -94,6 +121,88 @@ class FetchActivity : AppCompatActivity() {
             cm.setCookie("https://www.douyin.com", "$k=$v; Domain=.douyin.com; Path=/")
         }
         cm.flush()
+    }
+
+    // ------------------------------------------------------------------
+    // 访客模式：免登录抓取他人公开收藏
+    // ------------------------------------------------------------------
+
+    /** 解析输入并打开目标用户主页收藏页。 */
+    private fun startGuest(input: String) {
+        // 不注入任何登录 Cookie，保持「免登录」语义
+        val cm = CookieManager.getInstance()
+        cm.setAcceptCookie(true)
+        cm.removeAllCookies(null)
+        cm.flush()
+
+        val secUid = extractSecUid(input)
+        if (secUid != null) {
+            loadGuestProfile(secUid)
+            return
+        }
+        // 短链或抖音号：先打开页面，稍后从 URL / DOM 解析 sec_uid
+        guestResolving = true
+        val url = if (input.contains("douyin.com")) {
+            input
+        } else {
+            "https://www.douyin.com/search/" + Uri.encode(input)
+        }
+        binding.webView.loadUrl(url)
+    }
+
+    /** 从输入中提取 sec_uid；无法确定时返回 null。 */
+    private fun extractSecUid(input: String): String? {
+        // 主页链接：douyin.com/user/{secUid}
+        Regex("douyin\\.com/user/([A-Za-z0-9_\\-]+)").find(input)?.let {
+            val id = it.groupValues[1]
+            if (id != "self") return id
+        }
+        // 特征明显的 sec_uid（通常含 MS4wLjAB 或较长）
+        if (input.contains("MS4wLjAB") ||
+            (input.length >= 24 && Regex("^[A-Za-z0-9_\\-]+$").matches(input))
+        ) {
+            return input
+        }
+        return null
+    }
+
+    /** 打开用户主页的「收藏」Tab。 */
+    private fun loadGuestProfile(secUid: String) {
+        profileLoaded = true
+        binding.webView.loadUrl(
+            "https://www.douyin.com/user/${Uri.encode(secUid)}?showTab=favorite_collection"
+        )
+    }
+
+    /** 从已打开页面（短链重定向页 / 搜索页）解析出 sec_uid，再进入收藏页。 */
+    private fun resolveGuestFromPage(currentUrl: String?) {
+        if (finished) return
+        // 1) 当前 URL 已是用户主页
+        Regex("douyin\\.com/user/([A-Za-z0-9_\\-]+)").find(currentUrl ?: "")?.let {
+            val id = it.groupValues[1]
+            if (id != "self") {
+                guestResolving = false
+                loadGuestProfile(id)
+                return
+            }
+        }
+        // 2) 从页面 DOM 提取用户卡片链接（搜索页场景）
+        binding.webView.evaluateJavascript(RESOLVE_JS) { value ->
+            val secUid = Regex("\"secUid\"\\s*:\\s*\"([^\"]+)\"").find(value ?: "")
+                ?.groupValues?.get(1)
+            if (!secUid.isNullOrEmpty()) {
+                guestResolving = false
+                loadGuestProfile(secUid)
+            } else {
+                guestResolving = false
+                Toast.makeText(
+                    this,
+                    "无法解析该用户主页，请直接粘贴完整主页链接",
+                    Toast.LENGTH_LONG
+                ).show()
+                finishFetch(canceled = true)
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -217,11 +326,12 @@ class FetchActivity : AppCompatActivity() {
             store.lastUpdatedAt = System.currentTimeMillis()
             Toast.makeText(this, "已保存 ${allItems.size} 条收藏", Toast.LENGTH_SHORT).show()
         } else {
-            Toast.makeText(
-                this,
-                if (canceled) "已取消" else "未获取到数据（可能 Cookie 已过期，请重新登录）",
-                Toast.LENGTH_LONG
-            ).show()
+            val msg = when {
+                canceled -> "已取消"
+                guestMode -> "未获取到数据（对方收藏可能未公开，或未开启「公开收藏」）"
+                else -> "未获取到数据（可能 Cookie 已过期，请重新登录）"
+            }
+            Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
         }
         finish()
     }
@@ -232,6 +342,11 @@ class FetchActivity : AppCompatActivity() {
     }
 
     companion object {
+        const val EXTRA_MODE = "extra_mode"
+        const val EXTRA_GUEST_INPUT = "extra_guest_input"
+        const val MODE_SELF = "self"
+        const val MODE_GUEST = "guest"
+
         private const val FAVORITES_URL =
             "https://www.douyin.com/user/self?showTab=favorite_collection"
         private const val SCROLL_INTERVAL_MS = 2500L
@@ -312,7 +427,22 @@ class FetchActivity : AppCompatActivity() {
                     var m = h && h.match(/\/video\/(\d+)/);
                     if (m && ids.indexOf(m[1]) === -1) ids.push(m[1]);
                 }
-                return JSON.stringify({ids: ids});
+                return {ids: ids};
+            })();
+        """
+
+        /** 从搜索页/主页 DOM 中提取第一个用户主页链接的 sec_uid。 */
+        private const val RESOLVE_JS = """
+            (function() {
+                var links = document.querySelectorAll('a[href*="/user/"]');
+                for (var i = 0; i < links.length; i++) {
+                    var h = links[i].getAttribute('href') || '';
+                    var m = h.match(/\/user\/([A-Za-z0-9_\-]+)/);
+                    if (m && m[1] && m[1] !== 'self') {
+                        return {secUid: m[1]};
+                    }
+                }
+                return {secUid: ''};
             })();
         """
 

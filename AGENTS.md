@@ -44,9 +44,9 @@ GET https://www.douyin.com/aweme/v1/web/aweme/listcollection/
 
 ```
 app/src/main/java/com/example/myapplication/
-├── MainActivity.kt         # 主界面：三卡片（登录/抓取/分享）+ 随机分享 + 导入 Cookie + 自动更新
+├── MainActivity.kt         # 主界面：三卡片（登录/抓取/分享）+ 随机分享 + 导入 Cookie + 自动更新 + 抓取方式选择
 ├── LoginActivity.kt        # WebView 登录，检测 sessionid 并提取 Cookie
-├── FetchActivity.kt        # WebView 打开收藏页，JS hook + 自动滚动翻页抓取
+├── FetchActivity.kt        # WebView 抓取收藏（两种模式：self 登录抓自己 / guest 免登录抓他人公开收藏）
 ├── update/
 │   └── UpdateManager.kt    # 自动更新：GitHub API 检测 + 镜像下载 + 系统安装
 └── data/
@@ -66,21 +66,31 @@ app/src/main/java/com/example/myapplication/
 
 ## 抓取流程时序（FetchActivity）
 
-1. `injectCookies()`：将本地保存的 Cookie 注入 `CookieManager`。
-2. `loadUrl(收藏页)`。
-3. `onPageFinished` 后延迟 3 秒（等待首屏渲染）：
-   - `injectHook()`：注入 JS hook `window.fetch` 与 `XMLHttpRequest`，捕获 URL 含 `listcollection` 的响应体，经 `DyBridge` 桥回传原生。
-   - `seedFromDom()`：从已渲染 DOM 提取首屏 `video id`（兜底 hook 漏掉的第一页）。
-   - `startScrolling()`：每 2.5 秒执行滚动 JS 触发翻页。
+FetchActivity 支持两种模式（`EXTRA_MODE`，默认 `self`）：
+
+- **self 模式（抓自己的收藏，需登录）**：打开 `https://www.douyin.com/user/self?showTab=favorite_collection`，先注入本地 Cookie。
+- **guest 模式（免登录抓他人公开收藏）**：不注入任何 Cookie（清空 CookieManager），打开 `https://www.douyin.com/user/{sec_uid}?showTab=favorite_collection`。输入支持：
+  - 完整主页链接 `douyin.com/user/{sec_uid}` → 直接提取 sec_uid；
+  - `v.douyin.com` 短链 → 先加载，`onPageFinished` 后从最终 URL 提取 sec_uid；
+  - 用户 ID（sec_uid）→ 直接使用；
+  - 抖音号 → 打开 `douyin.com/search/{抖音号}`，注入 `RESOLVE_JS` 从 DOM 提取第一个用户卡片链接的 sec_uid。
+  - 仅当对方开启「公开收藏」时才有数据；收藏 tab 通过 URL 参数 `showTab=favorite_collection` 激活。
+  - **注意**：即使公开收藏，接口仍带 `a_bogus` 签名，所以同样必须走 WebView，只是不需要登录态。
+
+自我/访客收藏页加载完成后（`onPageFinished` 后延迟 3 秒，等待首屏渲染）：
+
+1. `injectHook()`：注入 JS hook `window.fetch` 与 `XMLHttpRequest`，捕获 URL 含 `listcollection` 的响应体，经 `DyBridge` 桥回传原生。
+2. `seedFromDom()`：从已渲染 DOM 提取首屏 `video id`（兜底 hook 漏掉的第一页）。
+3. `startScrolling()`：每 2.5 秒执行滚动 JS 触发翻页。
 4. 停止条件：接口返回 `has_more = false`，或连续 8 轮无新增（有数据时）/ 3 轮无数据（空列表时）。
 5. 保存到 `SettingsStore`。
 
 ## 约束与注意事项
 
-- **Cookie 是敏感数据**：仅保存在本机应用私有 SharedPreferences，禁止上传/日志输出；`allowBackup=false` 防止备份泄露。
+- **Cookie 是敏感数据**：仅保存在本机应用私有 SharedPreferences，禁止上传/日志输出；`allowBackup=false` 防止备份泄露。guest 模式明确清空 CookieManager，保证「免登录」语义。
 - 必须使用 **桌面 UA**（`Chrome/124 Windows`），保证收藏 tab 与接口存在于页面中。
 - `addJavascriptInterface` 必须在 `loadUrl` 之前调用。
-- 抖音页面结构/接口可能变化，`FetchActivity` 中的 JS（`HOOK_JS`、`DOM_SEED_JS`、`SCROLL_JS`）是失效时优先排查对象。
+- 抖音页面结构/接口可能变化，`FetchActivity` 中的 JS（`HOOK_JS`、`DOM_SEED_JS`、`RESOLVE_JS`、`SCROLL_JS`）是失效时优先排查对象。
 - 修改涉及收藏抓取的逻辑时，先对照 douyin-tools 的 Python 实现确认接口行为。
 
 ## 构建

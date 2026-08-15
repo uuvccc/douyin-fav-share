@@ -78,9 +78,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         binding.btnImportCookie.setOnClickListener { showImportCookieDialog() }
-        binding.btnFetch.setOnClickListener {
-            fetchLauncher.launch(Intent(this, FetchActivity::class.java))
-        }
+        binding.btnFetch.setOnClickListener { showFetchModeDialog() }
         binding.btnShare.setOnClickListener { shareRandom() }
 
         // 自动检查更新：仅对 CI 构建生效（本地开发版跳过，避免打扰）
@@ -163,6 +161,51 @@ class MainActivity : AppCompatActivity() {
             }
         }
         Toast.makeText(this, "已复制链接到剪贴板", Toast.LENGTH_SHORT).show()
+    }
+
+    // ------------------------------------------------------------------
+    // 收藏抓取（支持免登录抓取他人公开收藏）
+    // ------------------------------------------------------------------
+
+    /** 选择抓取方式：自己的收藏（需登录）或他人的公开收藏（免登录）。 */
+    private fun showFetchModeDialog() {
+        val options = arrayOf("抓取我的收藏（需登录）", "抓取他人公开收藏（免登录）")
+        AlertDialog.Builder(this)
+            .setTitle("选择抓取方式")
+            .setItems(options) { _, which ->
+                if (which == 0) {
+                    fetchLauncher.launch(Intent(this, FetchActivity::class.java))
+                } else {
+                    showGuestInputDialog()
+                }
+            }
+            .show()
+    }
+
+    /** 输入对方主页链接 / 用户 ID / 抖音号，免登录抓取公开收藏。 */
+    private fun showGuestInputDialog() {
+        val input = EditText(this).apply {
+            hint = "粘贴对方主页链接（douyin.com/user/… 或 v.douyin.com 短链）\n" +
+                "或用户 ID / 抖音号"
+            inputType = InputType.TYPE_CLASS_TEXT
+        }
+        AlertDialog.Builder(this)
+            .setTitle("抓取他人公开收藏")
+            .setMessage("无需登录。仅当对方开启了「公开收藏」时才能抓到数据。")
+            .setView(input)
+            .setPositiveButton("开始抓取") { _, _ ->
+                val text = input.text.toString().trim()
+                if (text.isEmpty()) {
+                    Toast.makeText(this, "请输入链接 / 用户 ID / 抖音号", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                val intent = Intent(this, FetchActivity::class.java)
+                    .putExtra(FetchActivity.EXTRA_MODE, FetchActivity.MODE_GUEST)
+                    .putExtra(FetchActivity.EXTRA_GUEST_INPUT, text)
+                fetchLauncher.launch(intent)
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     // ------------------------------------------------------------------
