@@ -48,6 +48,12 @@ class FetchActivity : AppCompatActivity() {
     /** 访客模式下是否仍在等待从页面解析 sec_uid。 */
     private var guestResolving = false
 
+    /** 是否已排队一次解析任务（避免 onPageFinished 重复调度）。 */
+    private var resolveScheduled = false
+
+    /** 搜索页解析失败重试次数。 */
+    private var resolveAttempts = 0
+
     /** 是否已加载到收藏页（自我收藏页或他人收藏页），可开始抓取。 */
     private var profileLoaded = false
 
@@ -96,7 +102,7 @@ class FetchActivity : AppCompatActivity() {
                 super.onPageFinished(view, url)
                 // 访客模式待解析：先尝试从当前页解析 sec_uid，再进入收藏页
                 if (guestMode && guestResolving) {
-                    handler.postDelayed({ resolveGuestFromPage(url) }, 2500)
+                    scheduleResolve(url)
                     return
                 }
                 // 收藏页加载完成：注入 hook -> 提取首屏 DOM 兜底 -> 开始滚动翻页
@@ -163,6 +169,11 @@ class FetchActivity : AppCompatActivity() {
         ) {
             return input
         }
+        // 纯数字 uid（如 54132528295）：douyin.com/user/{uid} 支持直接访问主页。
+        // 注意纯数字也可能是「抖音号」，同样可以先打开主页试一次，失败再走搜索。
+        if (input.length in 6..24 && Regex("^\\d+$").matches(input)) {
+            return input
+        }
         return null
     }
 
@@ -174,9 +185,20 @@ class FetchActivity : AppCompatActivity() {
         )
     }
 
+    /** 排定一次解析任务（onPageFinished 与失败重试共用，避免重复调度）。 */
+    private fun scheduleResolve(currentUrl: String?) {
+        if (resolveScheduled || finished) return
+        resolveScheduled = true
+        handler.postDelayed({
+            resolveScheduled = false
+            if (finished || !guestResolving) return@postDelayed
+            resolveGuestFromPage(currentUrl)
+        }, RESOLVE_INTERVAL_MS)
+    }
+
     /** 从已打开页面（短链重定向页 / 搜索页）解析出 sec_uid，再进入收藏页。 */
     private fun resolveGuestFromPage(currentUrl: String?) {
-        if (finished) return
+        if (finished || !guestResolving) return
         // 1) 当前 URL 已是用户主页
         Regex("douyin\\.com/user/([A-Za-z0-9_\\-]+)").find(currentUrl ?: "")?.let {
             val id = it.groupValues[1]
@@ -188,16 +210,21 @@ class FetchActivity : AppCompatActivity() {
         }
         // 2) 从页面 DOM 提取用户卡片链接（搜索页场景）
         binding.webView.evaluateJavascript(RESOLVE_JS) { value ->
+            if (finished || !guestResolving) return@evaluateJavascript
             val secUid = Regex("\"secUid\"\\s*:\\s*\"([^\"]+)\"").find(value ?: "")
                 ?.groupValues?.get(1)
             if (!secUid.isNullOrEmpty()) {
                 guestResolving = false
                 loadGuestProfile(secUid)
+            } else if (resolveAttempts < MAX_RESOLVE_ATTEMPTS) {
+                // 搜索页是 SPA 懒加载，首屏可能还没渲染出用户卡片，重试几次
+                resolveAttempts++
+                scheduleResolve(binding.webView.url)
             } else {
                 guestResolving = false
                 Toast.makeText(
                     this,
-                    "无法解析该用户主页，请直接粘贴完整主页链接",
+                    "无法解析该用户主页，请粘贴完整主页链接（douyin.com/user/…）",
                     Toast.LENGTH_LONG
                 ).show()
                 finishFetch(canceled = true)
@@ -351,6 +378,8 @@ class FetchActivity : AppCompatActivity() {
             "https://www.douyin.com/user/self?showTab=favorite_collection"
         private const val SCROLL_INTERVAL_MS = 2500L
         private const val MAX_EMPTY_ROUNDS = 8
+        private const val RESOLVE_INTERVAL_MS = 2500L
+        private const val MAX_RESOLVE_ATTEMPTS = 6
         private const val DESKTOP_UA =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
