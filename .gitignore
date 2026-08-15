@@ -19,5 +19,7 @@ local.properties
 *.jks.b64
 # 临时探查脚本
 .probe/
+# Playwright 浏览器用户数据目录（诊断残留，勿入库）
+/douyin-tools/.profile_*/
 # JS 测试的构建产物（由 extract_js.py 生成）
 /js-tests/build/

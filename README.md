@@ -24,10 +24,12 @@ app/                          # Android 应用（Kotlin + ViewBinding + Material
 ├── FetchActivity.kt          # WebView 抓取收藏（JS hook + 自动滚动翻页）
 └── data/                     # 数据模型与本地存储
 
-douyin-tools/                 # PC 端 Python 参考工具
+douyin-tools/                 # PC 端 Python 工具
+├── douyin_cookie_qr.py       # 一键自动登录 → 捕获 Cookie → 生成二维码（App 扫码即导入）
 ├── get_cookie_edge.py        # 从 Edge 提取 Cookie（参考实现）
 ├── get_cookie_playwright.py  # Playwright 扫码登录提取 Cookie（参考实现）
-└── fetch_collections.py      # 抓取收藏（参考实现，核心思路与 App 一致）
+├── fetch_collections.py      # 抓取收藏（参考实现，核心思路与 App 一致）
+└── test_douyin_cookie_qr.py  # douyin_cookie_qr.py 的单元测试（unittest）
 ```
 
 详细设计决策见 [`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md)。
@@ -42,7 +44,8 @@ douyin-tools/                 # PC 端 Python 参考工具
 
 ## 使用
 
-1. 安装 APK，点「登录抖音」，用已登录的抖音 App 扫页面二维码完成登录
+0. **（可选）PC 端一键生成 Cookie 二维码**：运行 `douyin-tools/douyin_cookie_qr.py`（需已装 Playwright / qrcode / Pillow），浏览器自动打开抖音 → 手机扫码登录 → 脚本捕获 Cookie 生成二维码图片；然后用 App 内「📷 扫码获取 Cookie」扫该二维码即自动导入登录态，全程无需手动复制。
+1. 安装 APK，点「登录抖音」，用已登录的抖音 App 扫页面二维码完成登录（或按第 0 步扫码导入 PC 端 Cookie）
 2. 点「开始抓取收藏」（抓取时保持页面可见）：
    - **抓取我的收藏**：需登录，可抓取自己的全部收藏
    - **抓取他人公开收藏**：免登录，粘贴对方主页链接 / 用户 ID / 抖音号即可；仅当对方开启了「公开收藏」时才能抓到

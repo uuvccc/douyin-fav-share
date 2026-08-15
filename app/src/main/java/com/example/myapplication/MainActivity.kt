@@ -20,6 +20,8 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.example.myapplication.data.SettingsStore
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import com.example.myapplication.databinding.ActivityMainBinding
 import com.example.myapplication.update.UpdateManager
 import org.json.JSONObject
@@ -55,6 +57,16 @@ class MainActivity : AppCompatActivity() {
             refreshStatus()
         }
 
+    /** 扫码获取 Cookie：扫 PC 端 douyin_cookie_qr.py 生成的二维码。 */
+    private val scanLauncher = registerForActivityResult(ScanContract()) { result ->
+        val text = result.contents
+        if (text.isNullOrBlank()) {
+            Toast.makeText(this, "扫码已取消", Toast.LENGTH_SHORT).show()
+            return@registerForActivityResult
+        }
+        importCookieText(text.trim())
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
@@ -78,6 +90,19 @@ class MainActivity : AppCompatActivity() {
             }
         }
         binding.btnImportCookie.setOnClickListener { showImportCookieDialog() }
+        binding.btnScanCookie.setOnClickListener {
+            try {
+                val options = ScanOptions().apply {
+                    setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                    setPrompt("扫描 PC 屏幕上的二维码获取 Cookie")
+                    setBeepEnabled(true)
+                    setOrientationLocked(false)
+                }
+                scanLauncher.launch(options)
+            } catch (e: Exception) {
+                Toast.makeText(this, "无法打开相机：${e.message}", Toast.LENGTH_LONG).show()
+            }
+        }
         binding.btnFetch.setOnClickListener { showFetchModeDialog() }
         binding.btnShare.setOnClickListener { shareRandom() }
 
@@ -351,7 +376,12 @@ class MainActivity : AppCompatActivity() {
             return
         }
         store.saveCookies(map)
-        Toast.makeText(this, "已导入 ${map.size} 个 Cookie", Toast.LENGTH_SHORT).show()
+        val msg = if (store.hasSession()) {
+            "✅ 已导入 ${map.size} 个 Cookie，登录态有效"
+        } else {
+            "已导入 ${map.size} 个 Cookie，但未检测到 sessionid，登录态可能不完整"
+        }
+        Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
         refreshStatus()
     }
 

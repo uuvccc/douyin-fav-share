@@ -40,6 +40,13 @@ jobs:
       - name: Run JS hook tests
         run: bash js-tests/run_js_tests.sh
 
+      # 校验 douyin-tools/douyin_cookie_qr.py 的纯函数（Cookie 拼接 + 二维码生成）。
+      # 只装 qrcode/pillow（纯函数测试不 import playwright），保持轻量。
+      - name: Run douyin-tools Python tests
+        run: |
+          python3 -m pip install --quiet "qrcode[pil]" pillow
+          cd douyin-tools && python3 -m unittest test_douyin_cookie_qr -v
+
       # 注入 CI_BUILD_ID（= run_id，更新检测用）与 CI_VERSION_CODE（= run_number，versionCode 用）。
       # run_number 严格递增且为小整数，保证每次 Release 的 versionCode 必然增大，
       # 否则新版 APK（固定密钥签名）因版本号不递增仍无法覆盖安装。

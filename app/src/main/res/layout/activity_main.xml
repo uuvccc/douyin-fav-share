@@ -91,6 +91,14 @@
                             android:layout_marginStart="6dp"
                             android:text="导入 Cookie" />
                     </LinearLayout>
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnScanCookie"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:text="📷 扫码获取 Cookie（PC 端二维码）" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 

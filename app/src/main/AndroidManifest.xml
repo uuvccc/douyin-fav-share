@@ -4,6 +4,8 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- 允许安装更新 APK（Android 8.0+ 需用户额外授权"允许安装未知来源应用"） -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- 二维码扫码获取 Cookie（PC 端 douyin_cookie_qr.py 生成） -->
+    <uses-permission android:name="android.permission.CAMERA" />
 
     <application
         android:allowBackup="false"

@@ -80,6 +80,9 @@ dependencies {
     implementation(libs.androidx.constraintlayout)
     implementation(libs.androidx.core.ktx)
     implementation(libs.material)
+    // 二维码扫码：PC 端 douyin_cookie_qr.py 生成的二维码
+    implementation(libs.zxing.embedded)
+    implementation(libs.zxing.core)
     testImplementation(libs.junit)
     // JVM 单元测试：真实 org.json 实现（默认 android.jar 里的是抛异常的 stub）
     testImplementation(libs.json)
