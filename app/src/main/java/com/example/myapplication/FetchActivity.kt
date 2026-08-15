@@ -169,11 +169,9 @@ class FetchActivity : AppCompatActivity() {
         ) {
             return input
         }
-        // 纯数字 uid（如 54132528295）：douyin.com/user/{uid} 支持直接访问主页。
-        // 注意纯数字也可能是「抖音号」，同样可以先打开主页试一次，失败再走搜索。
-        if (input.length in 6..24 && Regex("^\\d+$").matches(input)) {
-            return input
-        }
+        // 注意：纯数字（如 54132528295）是 uid/抖音号，不是 sec_uid。
+        // douyin.com/user/{id} 只接受 sec_uid，直接用纯数字会打开「用户不存在」页，
+        // 因此不能在这里直接返回，必须走搜索页解析。
         return null
     }
 
@@ -216,7 +214,15 @@ class FetchActivity : AppCompatActivity() {
             if (!secUid.isNullOrEmpty()) {
                 guestResolving = false
                 loadGuestProfile(secUid)
-            } else if (resolveAttempts < MAX_RESOLVE_ATTEMPTS) {
+                return@evaluateJavascript
+            }
+            // 刚点击了「用户」筛选 tab，等待结果重新渲染后再提取
+            if ((value ?: "").contains("\"clickedUserTab\":true")) {
+                resolveAttempts++
+                scheduleResolve(binding.webView.url)
+                return@evaluateJavascript
+            }
+            if (resolveAttempts < MAX_RESOLVE_ATTEMPTS) {
                 // 搜索页是 SPA 懒加载，首屏可能还没渲染出用户卡片，重试几次
                 resolveAttempts++
                 scheduleResolve(binding.webView.url)
@@ -224,7 +230,7 @@ class FetchActivity : AppCompatActivity() {
                 guestResolving = false
                 Toast.makeText(
                     this,
-                    "无法解析该用户主页，请粘贴完整主页链接（douyin.com/user/…）",
+                    "未找到该用户，请确认用户 ID 正确，或粘贴完整主页链接（douyin.com/user/…）",
                     Toast.LENGTH_LONG
                 ).show()
                 finishFetch(canceled = true)
@@ -460,15 +466,33 @@ class FetchActivity : AppCompatActivity() {
             })();
         """
 
-        /** 从搜索页/主页 DOM 中提取第一个用户主页链接的 sec_uid。 */
+        /**
+         * 从搜索页/主页 DOM 中提取第一个用户主页链接的 sec_uid。
+         * 搜索页默认展示「综合」结果，用户卡片在「用户」分类下：
+         * 找不到用户链接时，先尝试点击「用户」筛选 tab（结果重新渲染后再提取）。
+         */
         private const val RESOLVE_JS = """
             (function() {
+                // 1) 优先直接找用户主页链接
                 var links = document.querySelectorAll('a[href*="/user/"]');
                 for (var i = 0; i < links.length; i++) {
                     var h = links[i].getAttribute('href') || '';
                     var m = h.match(/\/user\/([A-Za-z0-9_\-]+)/);
                     if (m && m[1] && m[1] !== 'self') {
                         return {secUid: m[1]};
+                    }
+                }
+                // 2) 尝试点击「用户」筛选 tab（限一次，避免反复点击）
+                if (!window.__dyTabClicked) {
+                    var candidates = document.querySelectorAll('div, span, li, a');
+                    for (var j = 0; j < candidates.length; j++) {
+                        var el = candidates[j];
+                        var t = (el.textContent || '').trim();
+                        if (t === '用户' && el.offsetParent !== null && el.childElementCount === 0) {
+                            el.click();
+                            window.__dyTabClicked = true;
+                            return {clickedUserTab: true};
+                        }
                     }
                 }
                 return {secUid: ''};
