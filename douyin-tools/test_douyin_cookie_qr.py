@@ -40,6 +40,32 @@ class CookieStrTest(unittest.TestCase):
         self.assertEqual(mod.cookie_str_from_list(cookies), "a=x=y; z")
 
 
+class QrCookieStrTest(unittest.TestCase):
+    def test_only_key_fields(self):
+        # 二维码只应包含登录关键字段，过滤掉无关 Cookie
+        cookies = [
+            {"name": "sessionid", "value": "abc123"},
+            {"name": "ttwid", "value": "xyz"},
+            {"name": "foo", "value": "bar"},          # 非关键字段，应被过滤
+            {"name": "analytics", "value": "track"},  # 非关键字段，应被过滤
+        ]
+        result = mod.qr_cookie_str_from_list(cookies)
+        self.assertIn("sessionid=abc123", result)
+        self.assertIn("ttwid=xyz", result)
+        self.assertNotIn("foo", result)
+        self.assertNotIn("analytics", result)
+
+    def test_skip_empty_value(self):
+        cookies = [
+            {"name": "sessionid", "value": "abc123"},
+            {"name": "sid_guard", "value": ""},
+        ]
+        self.assertEqual(mod.qr_cookie_str_from_list(cookies), "sessionid=abc123")
+
+    def test_empty_list(self):
+        self.assertEqual(mod.qr_cookie_str_from_list([]), "")
+
+
 class QrImageTest(unittest.TestCase):
     def test_image_size_and_layout(self):
         cookie = "sessionid=abc123; ttwid=xyz; odin_tt=o; uid_tt=u"
@@ -55,6 +81,13 @@ class QrImageTest(unittest.TestCase):
         long_cookie = "sessionid=" + "x" * 1500
         img = mod.build_qr_image(long_cookie)
         self.assertGreaterEqual(img.width, 500)
+
+    def test_oversized_cookie_raises_friendly_error(self):
+        # 超长 Cookie（约 6000 字符，超出 QR 容量上限）应抛友好错误而非裸异常
+        huge_cookie = "sessionid=" + "y" * 6000
+        with self.assertRaises(ValueError) as ctx:
+            mod.build_qr_image(huge_cookie)
+        self.assertIn("过长", str(ctx.exception))
 
     def test_save_image(self):
         with tempfile.TemporaryDirectory() as d:

@@ -48,6 +48,15 @@ DESKTOP_UA = (
 # 关键登录态字段（用于日志提示）
 KEY_FIELDS = ("sessionid", "odin_tt", "passport_csrf_token", "sid_guard", "uid_tt", "sid_tt")
 
+# 二维码只编码这些登录关键字段（全量 Cookie 仍完整写入 COOKIE_FILE）。
+# 原因：抖音全量 Cookie 可达 5000+ 字符，超出 QR 码容量上限
+# （version 40 / 纠错 M 约 2331 字节），而 App 端识别登录态仅需关键字段。
+QR_FIELDS = (
+    "sessionid", "sessionid_ss", "sid_guard", "sid_tt",
+    "uid_tt", "uid_tt_ss", "ttwid", "odin_tt",
+    "passport_csrf_token", "passport_csrf_token_time",
+)
+
 
 def cookie_str_from_list(cookies: list) -> str:
     """把 Playwright cookie 列表拼接成 "name1=value1; name2=value2" 字符串。
@@ -56,6 +65,22 @@ def cookie_str_from_list(cookies: list) -> str:
     纯函数，便于单元测试。
     """
     pairs = [f"{c['name']}={c['value']}" for c in cookies if c.get("value")]
+    return "; ".join(pairs)
+
+
+def qr_cookie_str_from_list(cookies: list) -> str:
+    """从 Playwright cookie 列表中提取二维码所需的登录关键字段。
+
+    二维码容量有限（version 40 / 纠错 M 约 2331 字节），而抖音全量
+    Cookie 可达 5000+ 字符，因此只编码 QR_FIELDS 中的关键字段，
+    保证二维码可生成且 App 端足以识别登录态。
+    纯函数，便于单元测试。
+    """
+    pairs = [
+        f"{c['name']}={c['value']}"
+        for c in cookies
+        if c.get("value") and c["name"] in QR_FIELDS
+    ]
     return "; ".join(pairs)
 
 
@@ -91,7 +116,14 @@ def build_qr_image(cookie_str: str) -> Image.Image:
         border=2,
     )
     qr.add_data(cookie_str)
-    qr.make(fit=True)
+    try:
+        qr.make(fit=True)
+    except ValueError as e:
+        # QR 码版本上限 40，数据过长时 qrcode 库会抛 "Invalid version (was 41...)"
+        raise ValueError(
+            "Cookie 内容过长，无法生成二维码（超出 QR 码容量上限）。"
+            "请使用 qr_cookie_str_from_list 只保留登录关键字段。"
+        ) from e
     img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
 
     final = Image.new("RGB", (img.width, img.height + 80), "white")
@@ -183,7 +215,8 @@ async def capture_cookie() -> str | None:
                 with open(COOKIE_FILE, "w", encoding="utf-8") as f:
                     f.write(cookie_str)
                 print(f"Cookie 已保存到 {COOKIE_FILE}")
-                show_qr(cookie_str)
+                # 二维码容量有限，只编码登录关键字段（App 识别登录态足够）
+                show_qr(qr_cookie_str_from_list(cookies))
                 input("\n按回车键关闭浏览器并退出...")
                 await browser.close()
                 return cookie_str
