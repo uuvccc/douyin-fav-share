@@ -233,6 +233,30 @@ class HttpGetTest(unittest.TestCase):
             server.server_close()
         self.assertIn("g", r.body)
 
+    def test_pseudo_headers_stripped(self):
+        # Playwright 的 all_headers() 含 HTTP/2 伪头(:authority 等)，urllib 不认，
+        # http_get 必须剥离，否则抛 ValueError 根本发不出请求（真实重放曾因此失败）。
+        def handler(path):
+            return 200, "ok", None
+
+        server, port, captured = _start_mock_server(handler)
+        try:
+            r = mod.http_get(
+                f"http://127.0.0.1:{port}/api",
+                {":authority": "www.douyin.com", ":method": "GET", ":path": "/api",
+                 ":scheme": "https", "user-agent": mod.DESKTOP_UA},
+                "c=1",
+            )
+        finally:
+            server.shutdown()
+            server.server_close()
+        self.assertEqual(r.status, 200)
+        hdrs = captured["headers"]
+        self.assertNotIn(":authority", hdrs)
+        self.assertNotIn(":method", hdrs)
+        self.assertNotIn(":scheme", hdrs)
+        self.assertEqual(hdrs.get("user-agent"), mod.DESKTOP_UA)
+
     def test_connection_refused(self):
         import socket
         s = socket.socket()

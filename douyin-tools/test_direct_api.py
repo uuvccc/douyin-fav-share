@@ -207,9 +207,10 @@ def http_get(url: str, headers: dict, cookie_header: str, timeout: float = 15.0)
     - HTTPError 也读 body：抖音非 2xx 通常还是错误 JSON，不读就丢了信息。
     """
     h = {k: v for k, v in headers.items()
-         if k.lower() not in ("host", "content-length", "content-type", "connection",
-                              "accept-encoding", "cookie", "transfer-encoding",
-                              "proxy-connection")}
+         if not k.startswith(":")                       # HTTP/2 伪头(:authority等)urllib 不认
+         and k.lower() not in ("host", "content-length", "content-type", "connection",
+                               "accept-encoding", "cookie", "transfer-encoding",
+                               "proxy-connection")}
     h["Accept-Encoding"] = "identity"
     h["Cookie"] = cookie_header
     h["User-Agent"] = h.get("User-Agent") or DESKTOP_UA
@@ -318,12 +319,28 @@ async def _main(bundle):
         try:
             signer = await page.evaluate(
                 """() => {
+                  const s = window.byted_acrawler;
                   const checks = {};
                   for (const k of ['byted_acrawler', '_webmsxyw', 'webmsxyw', '__acrawler', '_sign']) {
                     try { checks[k] = typeof window[k]; } catch (e) { checks[k] = 'err'; }
                   }
-                  const keys = Object.keys(window).filter(k => /acrawler|webmsxyw/i.test(k));
-                  return { checks, matchedKeys: keys.slice(0, 20) };
+                  const matchedKeys = Object.keys(window).filter(k => /acrawler|webmsxyw/i.test(k)).slice(0, 20);
+                  // 尝试真正调用签名函数：能否给任意 URL 生成 a_bogus（Android 页内直连核心机制）
+                  let call = 'skipped';
+                  try {
+                    const testUrl = location.origin + '/aweme/v1/web/aweme/listcollection/?max_cursor=0&count=20&id_type=4';
+                    let out = null;
+                    if (typeof s === 'function') out = s({ url: testUrl });
+                    else if (s && typeof s.sign === 'function') out = s.sign({ url: testUrl });
+                    call = out == null
+                      ? ('callable=' + (typeof s === 'function' || !!(s && s.sign)) + '，返回 null')
+                      : (typeof out === 'string' ? out : JSON.stringify(out)).slice(0, 60);
+                  } catch (e) { call = '调用抛错: ' + String((e && e.message) || e).slice(0, 80); }
+                  return {
+                    checks, matchedKeys,
+                    signKeys: s && typeof s === 'object' ? Object.keys(s).slice(0, 8) : [],
+                    call,
+                  };
                 }""")
             print(f"  [签名函数探测] {signer}")
         except Exception as e:
@@ -352,6 +369,9 @@ async def _main(bundle):
         if b_variant and b_variant.status == 200 and "aweme_list" in b_variant.body:
             print("  ✅ 决定性成功：真实 a_bogus + 文件 cookie 走裸 HTTP 返回了收藏列表！")
             print("     → 直连接口可行，WebView 仅剩「本地生成新签名」这一个理由。")
+        elif b_variant and b_variant.status == 0:
+            print("  ⚠️ 重放未到达服务器（客户端报错）——这是脚本/环境问题，不是签名问题。")
+            print(f"      {b_variant.body[:200]}")
         elif "aweme_list" in body1:
             print("  ⚠️ 不具决定性：浏览器内成功，但裸 HTTP 重放失败。")
             print("     → 可能原因：TLS 指纹 / HTTP 版本被 WAF 拦、文件 cookie 不完整或过期、头缺失。")
@@ -385,6 +405,8 @@ async def _main(bundle):
             print(f"  重放 → HTTP {r2.status} | body[:200]: {r2.body[:200]!r}")
             if r2.status == 200 and "aweme_list" in r2.body:
                 print("  ✅ 第二页（不同 max_cursor）也直连成功 → 任意翻页可行。")
+            elif r2.status == 0:
+                print(f"  ⚠️ 重放未到达服务器（客户端报错）：{r2.body[:150]}")
             elif "aweme_list" in body2:
                 print("  ⚠️ 不具决定性：浏览器内成功但重放失败（TLS 指纹等）。")
         await browser.close()
