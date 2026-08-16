@@ -311,6 +311,23 @@ async def _main(bundle):
         browser_cookie = hdrs1.get("cookie", "")
         print(f"  ✅ 捕获到真实请求：{redact_url(req.url)}")
         print(f"  [浏览器内] HTTP {resp.status} | body[:300]: {body1[:300]!r}")
+
+        # 探测页面是否暴露可调用的 a_bogus 签名函数。若暴露，Android 端可用
+        # 「页内直连」：WebView 内用自己的签名函数给任意 max_cursor 生成 a_bogus，
+        # 再 fetch 拉下一页——不滚动、不重实现签名算法、也没有 TLS 指纹风险。
+        try:
+            signer = await page.evaluate(
+                """() => {
+                  const checks = {};
+                  for (const k of ['byted_acrawler', '_webmsxyw', 'webmsxyw', '__acrawler', '_sign']) {
+                    try { checks[k] = typeof window[k]; } catch (e) { checks[k] = 'err'; }
+                  }
+                  const keys = Object.keys(window).filter(k => /acrawler|webmsxyw/i.test(k));
+                  return { checks, matchedKeys: keys.slice(0, 20) };
+                }""")
+            print(f"  [签名函数探测] {signer}")
+        except Exception as e:
+            print(f"  [签名函数探测] 失败：{e}")
         print()
 
         replay_headers = {k: v for k, v in hdrs1.items() if k.lower() != "cookie"}

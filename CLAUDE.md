@@ -195,7 +195,7 @@ FetchActivity 支持两种模式（`EXTRA_MODE`，默认 `self`）：
 **关键事实**：`listcollection` 必须带 `a_bogus` 签名（+`msToken`）；cookie 是身份、a_bogus 是签名，两者都要。2026 年有开源 a_bogus 实现（JS/Python/C++）但**随抖音更新失效**。因此先做一步「签名 + cookie 走裸 HTTP 通不通」的实测，用数据决定走直连还是回退 WebView。
 
 **本会话完成**：
-- 新增 `douyin-tools/test_direct_api.py`：三段式诊断脚本（①直连无签名预期被拒 ②Playwright 带 cookie 打开收藏页，旁观捕获一条**真实签名** listcollection 请求 → urllib 原样重放，A=浏览器cookie/B=文件cookie 两个变体与浏览器内 ground truth 同屏对比 ③滚动触发第二页（新 max_cursor 真签名）再重放）。**安全：绝不打印 cookie 值**（`redact_url` 掩码 a_bogus/msToken 只留前 40 字符）。
+- 新增 `douyin-tools/test_direct_api.py`：三段式诊断脚本（①直连无签名预期被拒 ②Playwright 带 cookie 打开收藏页，旁观捕获一条**真实签名** listcollection 请求 → urllib 原样重放，A=浏览器cookie/B=文件cookie 两个变体与浏览器内 ground truth 同屏对比 ③滚动触发第二页（新 max_cursor 真签名）再重放）。**安全：绝不打印 cookie 值**（`redact_url` 掩码 a_bogus/msToken 只留前 40 字符）。步骤 2 内附「[签名函数探测]」：列出页面 window 上暴露的 a_bogus 签名相关键（`byted_acrawler`/`_webmsxyw` 等）——决定 Android 端「页内直连」（WebView 用自己的签名函数给任意 max_cursor 生成 a_bogus 再 fetch 翻页，不滚动）是否可行。
 - 新增 `douyin-tools/test_test_direct_api.py`：19 个 unittest（`parse_cookie_file`/`redact_url`/`build_step1_url`/`cookie_names_diff`/`gzip_maybe` + 本地 mock http server 验证 `http_get` 的头保真/403 body/gzip 解压）。无 cookie、无网络、无浏览器可跑。
 - 本机验证通过：`python -m unittest test_test_direct_api`（19 passed）+ `python test_direct_api.py --selftest`（Playwright 捕获闭环 OK）。
 - 注意：`page.expect_response()` 返回 `AsyncEventContextManager`，必须用 `async with ... as event:` + `event.value`，不能直接 `asyncio.shield` 它（TypeError）。
