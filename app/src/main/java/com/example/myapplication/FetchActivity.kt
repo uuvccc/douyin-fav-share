@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
@@ -68,6 +69,8 @@ class FetchActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityFetchBinding.inflate(layoutInflater)
         setContentView(binding.root)
+        // 抓取期间保持屏幕常亮，避免长时间滚动抓取时自动熄屏
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         store = SettingsStore(this)
 
         ViewCompat.setOnApplyWindowInsetsListener(binding.root) { v, insets ->
@@ -86,8 +89,7 @@ class FetchActivity : AppCompatActivity() {
         if (mode == MODE_GUEST) {
             guestMode = true
             binding.tvTitle.text = "抓取公开收藏"
-            binding.tvHint.text =
-                "正在打开对方主页的「收藏」Tab 并自动捕获数据…仅限对方开启「公开收藏」，请保持页面可见。"
+            binding.tvFetchProgress.text = "正在解析用户主页并打开「收藏」Tab…"
             startGuest(intent.getStringExtra(EXTRA_GUEST_INPUT)?.trim().orEmpty())
         } else {
             // self 模式直接打开收藏页，标记已加载以便 onPageFinished 启动抓取
@@ -387,6 +389,9 @@ class FetchActivity : AppCompatActivity() {
         val n = allItems.size
         binding.tvProgress.text =
             if (n == 0) "等待数据…" else "已获取 $n 条"
+        // 覆盖层（隐藏式 WebView 后的进度界面）同步计数
+        binding.tvFetchProgress.text =
+            if (n == 0) "正在抓取收藏…" else "正在抓取收藏… 已获取 $n 条"
     }
 
     private fun finishFetch(canceled: Boolean) {

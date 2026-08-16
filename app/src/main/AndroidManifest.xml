@@ -51,6 +51,9 @@
             <action android:name="android.intent.action.VIEW" />
             <data android:mimeType="application/vnd.android.package-archive" />
         </intent>
+        <!-- 分享后拉起「抖音精选」/ 抖音打开视频（resolveActivity 需要可见性） -->
+        <package android:name="com.ss.android.yumme.video" />
+        <package android:name="com.ss.android.ugc.aweme" />
     </queries>
 
 </manifest>

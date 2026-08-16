@@ -40,19 +40,52 @@
             android:textColor="@color/status_pending" />
     </LinearLayout>
 
-    <WebView
-        android:id="@+id/webView"
+    <!-- 内容区：WebView 隐藏在不透明的进度覆盖层下方，用户看到的只是进度界面。
+         注意不把 WebView 设为 INVISIBLE——保持它正常渲染，页面签名/翻页逻辑不受影响。 -->
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:layout_weight="1">
 
-    <TextView
-        android:id="@+id/tvHint"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:padding="10dp"
-        android:text="正在自动滚动收藏列表并捕获数据，请保持页面可见，抓取中请勿切换应用。"
-        android:textSize="12sp"
-        android:textColor="@android:color/darker_gray" />
+        <WebView
+            android:id="@+id/webView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <LinearLayout
+            android:id="@+id/fetchOverlay"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:padding="24dp"
+            android:background="@android:color/white">
+
+            <ProgressBar
+                android:id="@+id/fetchProgressBar"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="220dp"
+                android:layout_height="wrap_content"
+                android:indeterminate="true" />
+
+            <TextView
+                android:id="@+id/tvFetchProgress"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="20dp"
+                android:text="正在抓取收藏…"
+                android:textSize="16sp"
+                android:textColor="@android:color/black" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center"
+                android:text="抖音页面已隐藏，正在自动翻页抓取全部收藏\n请勿切换应用或锁屏"
+                android:textSize="12sp"
+                android:textColor="@android:color/darker_gray" />
+        </LinearLayout>
+    </FrameLayout>
 
 </LinearLayout>

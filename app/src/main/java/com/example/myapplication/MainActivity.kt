@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.text.InputType
 import android.view.Menu
@@ -186,6 +187,31 @@ class MainActivity : AppCompatActivity() {
             }
         }
         Toast.makeText(this, "已复制链接到剪贴板", Toast.LENGTH_SHORT).show()
+        // 自动拉起「抖音精选」（优先）打开该视频
+        openVideoInApp(item.url)
+    }
+
+    /** 分享后自动拉起抖音系 App 打开该视频：优先「抖音精选」，其次主抖音，最后浏览器兜底。 */
+    private fun openVideoInApp(url: String) {
+        // 抖音精选（原青桃视频，中长视频版）/ 主抖音
+        val targets = arrayOf("com.ss.android.yumme.video", "com.ss.android.ugc.aweme")
+        for (pkg in targets) {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).setPackage(pkg)
+            if (intent.resolveActivity(packageManager) != null) {
+                try {
+                    startActivity(intent)
+                    return
+                } catch (_: Exception) {
+                    // 启动失败，尝试下一个
+                }
+            }
+        }
+        // 浏览器兜底
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+        } catch (_: Exception) {
+            Toast.makeText(this, "未找到可打开视频的应用，链接已复制", Toast.LENGTH_SHORT).show()
+        }
     }
 
     // ------------------------------------------------------------------
