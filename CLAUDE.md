@@ -187,3 +187,23 @@ FetchActivity 支持两种模式（`EXTRA_MODE`，默认 `self`）：
 - `MainActivity.kt`：新增 `scanLauncher = registerForActivityResult(ScanContract())`，扫码结果复用现有 `importCookieText(text.trim())`（JSON 或 `name=value; ...` 均支持，内部走 `LoginActivity.parseCookies` + `SettingsStore.saveCookies`）；`importCookieText` 增强提示：未检测到 `sessionid` 时提示「登录态可能不完整」。
 
 **测试**：`douyin-tools/test_douyin_cookie_qr.py`（7 个 unittest：Cookie 拼接/空值跳过/长 Cookie 自动升版/图片尺寸与布局/保存），CI 已加对应步骤。Android 侧解析逻辑复用已有 `parseCookies` 测试，未新增。
+
+### 交接记录（2026-08-16）：直连接口抓取可行性实测
+
+**目标**：用户已有真实登录 Cookie（PC 端 `~/.douyin_cookie.txt`），希望放弃 WebView 模拟抓取（滚动慢），改用直接 HTTP 调用 `listcollection` 接口导出全部收藏（每页 1 次 HTTP、按 `max_cursor` 直接翻页、无需滚动），再随机选一条生成分享链接。
+
+**关键事实**：`listcollection` 必须带 `a_bogus` 签名（+`msToken`）；cookie 是身份、a_bogus 是签名，两者都要。2026 年有开源 a_bogus 实现（JS/Python/C++）但**随抖音更新失效**。因此先做一步「签名 + cookie 走裸 HTTP 通不通」的实测，用数据决定走直连还是回退 WebView。
+
+**本会话完成**：
+- 新增 `douyin-tools/test_direct_api.py`：三段式诊断脚本（①直连无签名预期被拒 ②Playwright 带 cookie 打开收藏页，旁观捕获一条**真实签名** listcollection 请求 → urllib 原样重放，A=浏览器cookie/B=文件cookie 两个变体与浏览器内 ground truth 同屏对比 ③滚动触发第二页（新 max_cursor 真签名）再重放）。**安全：绝不打印 cookie 值**（`redact_url` 掩码 a_bogus/msToken 只留前 40 字符）。
+- 新增 `douyin-tools/test_test_direct_api.py`：19 个 unittest（`parse_cookie_file`/`redact_url`/`build_step1_url`/`cookie_names_diff`/`gzip_maybe` + 本地 mock http server 验证 `http_get` 的头保真/403 body/gzip 解压）。无 cookie、无网络、无浏览器可跑。
+- 本机验证通过：`python -m unittest test_test_direct_api`（19 passed）+ `python test_direct_api.py --selftest`（Playwright 捕获闭环 OK）。
+- 注意：`page.expect_response()` 返回 `AsyncEventContextManager`，必须用 `async with ... as event:` + `event.value`，不能直接 `asyncio.shield` 它（TypeError）。
+
+**判定（不对称实验，勿误判）**：重放 200 且 body 含 `aweme_list` = **决定性成功**（直连可行）；浏览器内成功但重放失败 = **不具决定性**（可能 TLS 指纹/HTTP 版本被 WAF 拦、文件 cookie 不完整或过期、头缺失）。「成功有决定性、失败无决定性」。
+
+**使用**：F: 机器 `git pull` 后 `douyin-tools/.venv/Scripts/python test_direct_api.py`，把三段输出 + VERDICT 贴回分析。**该脚本是有 cookie 的机器才能跑完**（本机无 cookie，只做了单测/自测）。暂未加入 CI（一次性诊断工具，非生产代码）。
+
+**待实测后决策（Phase 2）**：
+- 若直连通 → 直连抓取器：PC 端 Python 先验证，再评估 App 端（隐藏 WebView 跑签名 JS + OkHttp 直连；**Android OkHttp 的 TLS 指纹与 Chrome 不同，需真机再实测**）。签名算法随抖音更新需持续维护。
+- 若失败/不具决定性 → 回退 WebView 事件驱动重构：`CollectionPager` 状态机替代 2.5s 定时滚动（速度 ~3x）。该设计已评审通过，含 4 处必修：teardown 清理定时器 / kick 合并 / FINISH 幂等 / onPageFinished 门控修复（含 self 模式抓取未启动的 bug：`profileLoaded` 仅 guest 模式设置）。
