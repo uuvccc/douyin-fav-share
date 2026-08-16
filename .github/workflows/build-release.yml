@@ -1,9 +1,12 @@
 name: Build & Auto-Release APK
 
-# 每次 push（以及手动触发）都会触发构建并发布 Release
+# 每次 push（以及手动触发）都会触发构建并发布 Release。
+# douyin-tools/** 的改动只影响 PC 端工具，不触发 App 构建/发布。
 on:
   push:
     branches: [master, main]
+    paths-ignore:
+      - 'douyin-tools/**'
   workflow_dispatch:
 
 # 需要写权限以创建 Release 并上传附件

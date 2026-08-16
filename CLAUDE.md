@@ -176,7 +176,7 @@ FetchActivity 支持两种模式（`EXTRA_MODE`，默认 `self`）：
 
 **PC 端 `douyin-tools/douyin_cookie_qr.py`**：
 - 运行：`douyin-tools/.venv/Scripts/python douyin-tools/douyin_cookie_qr.py`（需先 `pip install "qrcode[pil]" pillow`；playwright 已装在 venv）。
-- 流程：Playwright 有头模式 + 移动端 UA（Pixel 8 Pro）打开 `douyin.com` → 5 秒后若无登录浮层自动点击「登录」→ 轮询 `context.cookies()` 检测 `sessionid`（120 秒超时）→ 拼接 `name=value; name=value` 保存 `~/.douyin_cookie.txt` → qrcode 生成二维码（version 8 / 纠错 M / box_size 12 / border 2，顶部 80px 提示文字「扫描此二维码获取 Cookie」）保存 `~/.douyin_cookie_qr.png` 并自动打开 → 回车退出。
+- 流程：Playwright 有头模式 + **桌面版 UA**（Windows Chrome）打开 `douyin.com` → 5 秒后若无登录浮层自动点击「登录」（多选择器依次尝试，桌面版右上角按钮最稳定；曾用移动端 UA 但登录浮层不弹出，已弃用）→ 轮询 `context.cookies()` 检测 `sessionid`（120 秒超时）→ 拼接 `name=value; name=value` 保存 `~/.douyin_cookie.txt` → qrcode 生成二维码（version 8 / 纠错 M / box_size 12 / border 2，顶部 80px 提示文字「扫描此二维码获取 Cookie」）保存 `~/.douyin_cookie_qr.png` 并自动打开 → 回车退出。
 - 已修正原需求中的错误：`--no-sandbox`（非 `nosandbox`）、跨平台中文字体 fallback（macOS 苹方 / Windows 微软雅黑 / Linux 文泉驿 / load_default）。
 - 可测试纯函数：`cookie_str_from_list(cookies)`、`build_qr_image(cookie_str)`、`show_qr(cookie_str)`。playwright 在 `capture_cookie()` 内延迟导入，保证测试不依赖浏览器。
 

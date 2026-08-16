@@ -6,9 +6,9 @@ douyin_cookie_qr.py — PC 端全自动获取抖音 Cookie 并生成二维码
     python douyin_cookie_qr.py
 
 流程：
-    1. Playwright 启动 Chromium（有头模式），移动端 UA 打开抖音首页
-    2. 若 5 秒内未出现登录浮层，自动点击"登录"按钮
-    3. 用户用手机抖音 App 扫码登录（或手机号验证码登录）
+    1. Playwright 启动 Chromium（有头模式），桌面版 UA 打开抖音首页
+    2. 自动点击右上角"登录"按钮，弹出二维码登录浮层
+    3. 用户用手机抖音 App 扫码登录
     4. 轮询 context.cookies() 检测 sessionid（120 秒超时）
     5. 登录成功后拼接 Cookie 字符串，保存 ~/.douyin_cookie.txt
     6. 生成带提示文字的二维码图片，保存 ~/.douyin_cookie_qr.png 并自动打开
@@ -37,11 +37,12 @@ LOGIN_TIMEOUT = 120          # 登录等待超时（秒）
 FLOATING_WAIT = 5            # 打开页面后等待登录浮层出现的时间（秒）
 POLL_INTERVAL = 1            # 轮询 Cookie 的间隔（秒）
 
-# 移动端 UA：抖音网页版在移动端 UA 下交互更友好（扫码登录入口更直接）
-MOBILE_UA = (
-    "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) "
+# 桌面版 UA：抖音桌面版右上角有固定的"登录"按钮，点击后必然弹出二维码浮层；
+# 移动版首页没有自动弹出的登录浮层，且按钮选择器不稳定，故不使用移动 UA。
+DESKTOP_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/125.0.0.0 Mobile Safari/537.36"
+    "Chrome/125.0.0.0 Safari/537.36"
 )
 
 # 关键登录态字段（用于日志提示）
@@ -130,9 +131,8 @@ async def capture_cookie() -> str | None:
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False, args=["--no-sandbox"])
         context = await browser.new_context(
-            user_agent=MOBILE_UA,
-            viewport={"width": 430, "height": 932},
-            device_scale_factor=2,
+            user_agent=DESKTOP_UA,
+            viewport={"width": 1280, "height": 800},
         )
         page = await context.new_page()
 
@@ -145,16 +145,24 @@ async def capture_cookie() -> str | None:
         print(f"等待登录中...（超时 {LOGIN_TIMEOUT} 秒）")
         print("=" * 50)
 
-        # 等待浮层出现；若 5 秒后仍无登录浮层，自动点击"登录"按钮
+        # 等待浮层出现；若 5 秒后仍无登录浮层，自动点击"登录"按钮。
+        # 桌面版右上角登录按钮文字固定，依次尝试多种选择器提高命中率。
         await page.wait_for_timeout(FLOATING_WAIT * 1000)
-        try:
-            login_btn = await page.query_selector("text=登录")
-            if login_btn:
-                await login_btn.click()
-                await page.wait_for_timeout(2000)
-                print("已自动点击登录按钮")
-        except Exception:
-            pass
+        clicked = False
+        for selector in ('text=登录', 'button:has-text("登录")', 'a:has-text("登录")', '.login-button'):
+            try:
+                btn = await page.query_selector(selector)
+                if btn and await btn.is_visible():
+                    await btn.click()
+                    await page.wait_for_timeout(2000)
+                    clicked = True
+                    break
+            except Exception:
+                continue
+        if clicked:
+            print("已自动点击登录按钮，等待扫码...")
+        else:
+            print("未找到登录按钮，若页面已显示二维码可直接扫码。")
 
         # 轮询检测登录状态：出现 sessionid 即视为登录成功
         start = time.time()
