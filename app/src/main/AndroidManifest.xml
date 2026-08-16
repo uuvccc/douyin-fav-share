@@ -33,6 +33,12 @@
             android:name=".FetchActivity"
             android:exported="false" />
 
+        <!-- 扫码页：锁定竖屏 -->
+        <activity
+            android:name=".PortraitCaptureActivity"
+            android:exported="false"
+            android:screenOrientation="portrait" />
+
         <!-- 供系统安装器读取下载的 APK 文件 -->
         <provider
             android:name="androidx.core.content.FileProvider"

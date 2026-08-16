@@ -97,7 +97,9 @@ class MainActivity : AppCompatActivity() {
                     setDesiredBarcodeFormats(ScanOptions.QR_CODE)
                     setPrompt("扫描 PC 屏幕上的二维码获取 Cookie")
                     setBeepEnabled(true)
-                    setOrientationLocked(false)
+                    // 锁定竖屏扫码（配合 PortraitCaptureActivity）
+                    setOrientationLocked(true)
+                    setCaptureActivity(PortraitCaptureActivity::class.java)
                 }
                 scanLauncher.launch(options)
             } catch (e: Exception) {
@@ -124,6 +126,10 @@ class MainActivity : AppCompatActivity() {
                 checkForUpdates(manual = true)
                 true
             }
+            R.id.action_about -> {
+                showAboutDialog()
+                true
+            }
             else -> super.onOptionsItemSelected(item)
         }
     }
@@ -131,6 +137,23 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         refreshStatus()
+    }
+
+    /** 关于对话框：显示应用名称与当前版本信息。 */
+    private fun showAboutDialog() {
+        val message = buildString {
+            append("名称：").append(getString(R.string.app_name)).append('\n')
+            append("版本：").append(BuildConfig.VERSION_NAME).append('\n')
+            append("版本号（versionCode）：").append(BuildConfig.VERSION_CODE).append('\n')
+            if (BuildConfig.CI_BUILD_ID > 0L) {
+                append("构建 ID：").append(BuildConfig.CI_BUILD_ID).append('\n')
+            }
+        }
+        AlertDialog.Builder(this)
+            .setTitle("关于")
+            .setMessage(message.trim())
+            .setPositiveButton("确定", null)
+            .show()
     }
 
     private fun refreshStatus() {
