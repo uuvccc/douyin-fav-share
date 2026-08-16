@@ -313,38 +313,64 @@ async def _main(bundle):
         print(f"  ✅ 捕获到真实请求：{redact_url(req.url)}")
         print(f"  [浏览器内] HTTP {resp.status} | body[:300]: {body1[:300]!r}")
 
-        # 探测页面是否暴露可调用的 a_bogus 签名函数。若暴露，Android 端可用
-        # 「页内直连」：WebView 内用自己的签名函数给任意 max_cursor 生成 a_bogus，
-        # 再 fetch 拉下一页——不滚动、不重实现签名算法、也没有 TLS 指纹风险。
+        # 探测「页内直连翻页」的核心机制（Android 实现的关键取证）：
+        #   构造无签名、max_cursor=20 的探测 URL，然后分别验证两条路：
+        #   1) 手动调 byted_acrawler.frontierSign 生成新 a_bogus（新版签名入口）
+        #   2) 页内裸 fetch 未签名 URL，看页面请求层是否自动补签名（若能，实现最简）
         try:
-            signer = await page.evaluate(
-                """() => {
-                  const s = window.byted_acrawler;
-                  const checks = {};
-                  for (const k of ['byted_acrawler', '_webmsxyw', 'webmsxyw', '__acrawler', '_sign']) {
-                    try { checks[k] = typeof window[k]; } catch (e) { checks[k] = 'err'; }
-                  }
-                  const matchedKeys = Object.keys(window).filter(k => /acrawler|webmsxyw/i.test(k)).slice(0, 20);
-                  // 尝试真正调用签名函数：能否给任意 URL 生成 a_bogus（Android 页内直连核心机制）
-                  let call = 'skipped';
-                  try {
-                    const testUrl = location.origin + '/aweme/v1/web/aweme/listcollection/?max_cursor=0&count=20&id_type=4';
-                    let out = null;
-                    if (typeof s === 'function') out = s({ url: testUrl });
-                    else if (s && typeof s.sign === 'function') out = s.sign({ url: testUrl });
-                    call = out == null
-                      ? ('callable=' + (typeof s === 'function' || !!(s && s.sign)) + '，返回 null')
-                      : (typeof out === 'string' ? out : JSON.stringify(out)).slice(0, 60);
-                  } catch (e) { call = '调用抛错: ' + String((e && e.message) || e).slice(0, 80); }
-                  return {
-                    checks, matchedKeys,
-                    signKeys: s && typeof s === 'object' ? Object.keys(s).slice(0, 8) : [],
-                    call,
-                  };
-                }""")
-            print(f"  [签名函数探测] {signer}")
+            from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+            sp = urlsplit(req.url)
+            qs = [(k, v) for k, v in parse_qsl(sp.query, keep_blank_values=True)
+                  if k not in ("a_bogus", "timestamp", "x-secsdk-web-signature")]
+            qs = [(("max_cursor", "20") if k == "max_cursor" else (k, v)) for k, v in qs]
+            probe_url = urlunsplit((sp.scheme, sp.netloc, sp.path, urlencode(qs), ""))
         except Exception as e:
-            print(f"  [签名函数探测] 失败：{e}")
+            probe_url = None
+            print(f"  [构造探测URL] 失败：{e}")
+
+        if probe_url:
+            # 1) frontierSign 手动签名探测
+            try:
+                fs = await page.evaluate(
+                    """(arg) => {
+                      const s = window.byted_acrawler;
+                      const out = { frontierSignType: s && typeof s.frontierSign, initType: s && typeof s.init };
+                      if (s && typeof s.frontierSign === 'function') {
+                        let r = null, err = null;
+                        for (const attempt of [() => s.frontierSign({ url: arg.url }), () => s.frontierSign(arg.url)]) {
+                          try { r = attempt(); if (r != null) break; } catch (e) { err = e; }
+                        }
+                        if (r == null) {
+                          out.result = err ? ('failed: ' + String((err && err.message) || err).slice(0, 80)) : 'all returned null';
+                        } else {
+                          const txt = typeof r === 'string' ? r : JSON.stringify(r);
+                          out.result = txt.slice(0, 120);
+                          out.hasABogus = typeof txt === 'string' && txt.indexOf('a_bogus') !== -1;
+                        }
+                      } else {
+                        out.result = 'frontierSign 不可调用';
+                      }
+                      return out;
+                    }""", {"url": probe_url})
+                print(f"  [frontierSign 探测] {fs}")
+            except Exception as e:
+                print(f"  [frontierSign 探测] 失败：{e}")
+
+            # 2) 页内直连探测：裸 fetch 未签名 URL，看页面请求层是否自动补签名
+            try:
+                ride = await page.evaluate(
+                    """async (arg) => {
+                      try {
+                        const resp = await fetch(arg.url, { credentials: 'include' });
+                        const text = await resp.text();
+                        return { status: resp.status, hasAwemeList: text.indexOf('aweme_list') !== -1, bodyHead: text.slice(0, 80) };
+                      } catch (e) {
+                        return { error: String((e && e.message) || e).slice(0, 100) };
+                      }
+                    }""", {"url": probe_url})
+                print(f"  [页内直连探测] {ride}")
+            except Exception as e:
+                print(f"  [页内直连探测] 失败：{e}")
         print()
 
         replay_headers = {k: v for k, v in hdrs1.items() if k.lower() != "cookie"}
