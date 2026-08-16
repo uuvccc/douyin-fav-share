@@ -199,22 +199,48 @@ class MainActivity : AppCompatActivity() {
         openVideoInApp(item.url)
     }
 
-    /** 分享后自动拉起抖音系 App 打开该视频：优先「抖音精选」，其次主抖音，最后浏览器兜底。 */
+    /**
+     * 分享后自动拉起抖音系 App 打开该视频。
+     *
+     * 为什么系统「打开方式」里永远只有主抖音、没有「抖音精选」：
+     * 主抖音注册了 www.douyin.com 的 App Link（网页链接直接进 App），而「抖音精选」
+     * (com.ss.android.yumme.video) 没有注册——所以无论系统解析还是走 WebView 加载抖音
+     * 页面（页面「打开APP」按钮也只拉起主抖音），都叫不出抖音精选。唯一能直达抖音精选的
+     * 是它自己的私有 scheme（snssdkXXXX://aweme/detail/{id}），appid 未公开，需从安装包
+     * dump 得到后填到 [JINGXUAN_SCHEME]：
+     *   adb shell dumpsys package com.ss.android.yumme.video | findstr /i "snssdk"
+     */
     private fun openVideoInApp(url: String) {
-        // 抖音精选（原青桃视频，中长视频版）/ 主抖音
-        val targets = arrayOf("com.ss.android.yumme.video", "com.ss.android.ugc.aweme")
-        for (pkg in targets) {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).setPackage(pkg)
-            if (intent.resolveActivity(packageManager) != null) {
-                try {
-                    startActivity(intent)
-                    return
-                } catch (_: Exception) {
-                    // 启动失败，尝试下一个
-                }
+        val awemeId = url.substringAfterLast('/')
+        // 1) 抖音精选网页链接 intent-filter（若它哪天注册了 App Link 就能直接命中）
+        try {
+            val jc = Intent(Intent.ACTION_VIEW, Uri.parse(url)).setPackage("com.ss.android.yumme.video")
+            if (jc.resolveActivity(packageManager) != null) {
+                startActivity(jc)
+                return
+            }
+        } catch (_: Exception) {
+            // 解析失败，继续降级
+        }
+        // 2) 抖音精选私有 scheme（待 adb dump 后填写，空串跳过）
+        if (JINGXUAN_SCHEME.isNotEmpty()) {
+            try {
+                startActivity(
+                    Intent(Intent.ACTION_VIEW, Uri.parse("$JINGXUAN_SCHEME://aweme/detail/$awemeId"))
+                )
+                return
+            } catch (_: Exception) {
+                // scheme 无应用响应，继续降级
             }
         }
-        // 浏览器兜底
+        // 3) 主抖音私有 scheme：直接进作品详情页（比网页 App Link 更可靠）
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("snssdk1128://aweme/detail/$awemeId")))
+            return
+        } catch (_: Exception) {
+            // 未安装主抖音或 scheme 无响应，走系统解析
+        }
+        // 4) 网页链接交系统解析：主抖音 App Link 直接打开；未装则弹浏览器选择
         try {
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
         } catch (_: Exception) {
@@ -422,5 +448,14 @@ class MainActivity : AppCompatActivity() {
     companion object {
         /** 访客抓取输入框的默认用户 ID。 */
         private const val DEFAULT_GUEST_UID = "54132528295"
+
+        /**
+         * 「抖音精选」(com.ss.android.yumme.video，原青桃视频) 的私有 scheme appid。
+         * 已从设备 dump 确认：adb dumpsys 显示 snssdk568863://elder/setting（长辈模式入口），
+         * 故 appid = 568863。视频作品详情路由沿用抖音系通用 aweme/detail/{id}；
+         * 若真机打开后没有直达视频，需再 grep 安装包确认视频路由（aweme/video/detail）。
+         * 填了之后分享会自动直接拉起抖音精选打开该视频；空串则跳过该分支。
+         */
+        private const val JINGXUAN_SCHEME = "snssdk568863"
     }
 }
