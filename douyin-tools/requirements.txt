@@ -1,2 +1,4 @@
 playwright>=1.40
 pycryptodome>=3.19
+qrcode[pil]>=8.2
+pillow>=12.0

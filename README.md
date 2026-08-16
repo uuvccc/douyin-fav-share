@@ -44,7 +44,15 @@ douyin-tools/                 # PC 端 Python 工具
 
 ## 使用
 
-0. **（可选）PC 端一键生成 Cookie 二维码**：运行 `douyin-tools/douyin_cookie_qr.py`（需已装 Playwright / qrcode / Pillow），浏览器自动打开抖音 → 手机扫码登录 → 脚本捕获 Cookie 生成二维码图片；然后用 App 内「📷 扫码获取 Cookie」扫该二维码即自动导入登录态，全程无需手动复制。
+0. **（可选）PC 端一步生成 Cookie 二维码**：只需运行**一条命令**，脚本自动完成「打开抖音 → 手机扫码登录 → 捕获 Cookie → 生成二维码」全流程，无需任何第二步操作：
+
+   ```bash
+   douyin-tools\.venv\Scripts\python douyin-tools\douyin_cookie_qr.py
+   ```
+
+   运行后脚本自动衔接两次扫码，你只需跟着提示分别扫两次：
+   1. 浏览器窗口里的**抖音登录二维码** → 用已登录的抖音 App 扫码完成登录；
+   2. 脚本捕获 Cookie 后自动生成**导入二维码**（`~/.douyin_cookie_qr.png`）→ 在 App 内点「📷 扫码获取 Cookie」扫它，登录态即自动导入，全程无需手动复制。
 1. 安装 APK，点「登录抖音」，用已登录的抖音 App 扫页面二维码完成登录（或按第 0 步扫码导入 PC 端 Cookie）
 2. 点「开始抓取收藏」（抓取时保持页面可见）：
    - **抓取我的收藏**：需登录，可抓取自己的全部收藏

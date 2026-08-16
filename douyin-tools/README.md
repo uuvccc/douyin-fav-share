@@ -19,11 +19,27 @@ python -m venv .venv
 
 | 脚本 | 作用 | 依赖 |
 |------|------|------|
+| `douyin_cookie_qr.py` | **一键**自动登录捕获 Cookie 并生成二维码（App 扫码即导入） | playwright + qrcode + pillow |
 | `get_cookie_edge.py` | 从 Edge 本地库解密提取 Cookie（全自动，需关闭 Edge） | pycryptodome |
 | `get_cookie_playwright.py` | 弹窗扫码登录后提取 Cookie（最稳，不受加密影响） | playwright |
 | `fetch_collections.py` | 抓取全部收藏视频链接 | playwright + 已生成的 Cookie |
 
-### 1. 获取 Cookie（二选一）
+### 0. 一键生成 Cookie 二维码（推荐，供 App 扫码导入）
+
+只需**一条命令**，自动完成「打开抖音 → 手机扫码登录 → 捕获 Cookie → 生成二维码」全流程：
+
+```bash
+.venv\Scripts\python douyin_cookie_qr.py
+```
+
+脚本会自动衔接两次扫码，你只需跟着提示分别扫两次：
+
+1. 浏览器窗口里的**抖音登录二维码** → 用已登录的抖音 App 扫码完成登录；
+2. 捕获 Cookie 后自动生成**导入二维码**（保存为 `~/.douyin_cookie_qr.png` 并自动打开）→ 用 App 内「📷 扫码获取 Cookie」扫它即导入登录态。
+
+> 注意：跑完脚本登录态也保存在 `~/.douyin_cookie.txt`，属于敏感数据，勿外传。
+
+### 1. 获取 Cookie（备选）
 
 **方式 A：Edge 直接解密**（如果你用 Edge 登录过抖音）
 
@@ -55,6 +71,8 @@ python -m venv .venv
 
 ```
 douyin-tools/
+├── douyin_cookie_qr.py         # 一键登录 → 捕获 Cookie → 生成二维码
+├── test_douyin_cookie_qr.py    # douyin_cookie_qr.py 单元测试（unittest）
 ├── get_cookie_edge.py          # Cookie 获取：Edge 解密
 ├── get_cookie_playwright.py    # Cookie 获取：浏览器扫码
 ├── fetch_collections.py        # 收藏抓取
