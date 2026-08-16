@@ -11,7 +11,7 @@ douyin_cookie_qr.py — PC 端全自动获取抖音 Cookie 并生成二维码
     3. 用户用手机抖音 App 扫码登录
     4. 轮询 context.cookies() 检测 sessionid（120 秒超时）
     5. 登录成功后拼接 Cookie 字符串，保存 ~/.douyin_cookie.txt
-    6. 生成带提示文字的二维码图片，保存 ~/.douyin_cookie_qr.png 并自动打开
+    6. 生成二维码保存为 ~/.douyin_cookie_qr.png，并自动在浏览器新标签弹出供 App 扫码
     7. 用户按回车后关闭浏览器退出
 
 依赖：
@@ -19,6 +19,8 @@ douyin_cookie_qr.py — PC 端全自动获取抖音 Cookie 并生成二维码
 """
 
 import asyncio
+import base64
+import io
 import os
 import sys
 import time
@@ -147,22 +149,27 @@ def build_qr_image(cookie_str: str) -> Image.Image:
     return final
 
 
-def show_qr(cookie_str: str) -> str:
-    """保存二维码图片到 ~/.douyin_cookie_qr.png 并自动打开，返回图片路径。
+def save_qr(cookie_str: str) -> str:
+    """生成二维码并保存 PNG 到 ~/.douyin_cookie_qr.png，返回路径。
 
-    图片始终会保存成功；若系统未关联图片查看器导致无法自动打开，
-    会回退用资源管理器打开所在目录，并提示手动打开图片。
+    纯文件操作，不依赖系统图片查看器，始终成功。
     """
-    img = build_qr_image(cookie_str)
-    img.save(QR_IMAGE_PATH)
-    opened = False
+    build_qr_image(cookie_str).save(QR_IMAGE_PATH)
+    return QR_IMAGE_PATH
+
+
+def try_open_image() -> bool:
+    """尽力用系统默认方式打开二维码图片，返回是否已弹出。
+
+    Windows 上优先用图片查看器打开 .png；未关联图片查看器时
+    回退用资源管理器打开所在目录（此时返回 False，提示手动打开）。
+    """
     if sys.platform == "darwin":
-        if os.system(f"open {QR_IMAGE_PATH}") == 0:
-            opened = True
-    elif sys.platform == "win32":
+        return os.system(f"open {QR_IMAGE_PATH}") == 0
+    if sys.platform == "win32":
         try:
             os.startfile(QR_IMAGE_PATH)  # noqa: S606 (Windows 打开图片的惯用方式)
-            opened = True
+            return True
         except OSError:
             # 系统未关联 .png 默认查看器时 os.startfile 抛 OSError，
             # 回退用资源管理器打开所在目录，用户可自行双击图片。
@@ -170,16 +177,47 @@ def show_qr(cookie_str: str) -> str:
                 os.startfile(os.path.dirname(QR_IMAGE_PATH))
             except OSError:
                 pass
-    else:
-        if os.system(f"xdg-open {QR_IMAGE_PATH}") == 0:
-            opened = True
+            return False
+    return os.system(f"xdg-open {QR_IMAGE_PATH}") == 0
 
+
+def show_qr(cookie_str: str) -> str:
+    """保存二维码图片到 ~/.douyin_cookie_qr.png 并尝试用系统方式自动打开。
+
+    图片始终会保存成功；若系统未关联图片查看器导致无法自动打开，
+    会回退用资源管理器打开所在目录，并提示手动打开图片。
+    """
+    save_qr(cookie_str)
     print(f"✅ 二维码已生成：{QR_IMAGE_PATH}")
-    if opened:
+    if try_open_image():
         print("   已自动打开，请用 App 内「📷 扫码获取 Cookie」扫描。")
     else:
-        print("   系统未能自动打开图片，请到上述路径手动打开后扫码。")
+        print(f"   系统未能自动打开图片，请到 {QR_IMAGE_PATH} 手动打开后扫码。")
     return QR_IMAGE_PATH
+
+
+async def _popup_qr_in_browser(context, cookie_str: str) -> None:
+    """在已打开的浏览器里弹出一个新标签页直接显示二维码。
+
+    这是最稳的「二维码自己弹出来」方式：不依赖系统是否装了图片查看器。
+    登录用的 Chromium 窗口本就置顶显示，新标签会自动弹出并聚焦，直接扫码即可。
+    """
+    buf = io.BytesIO()
+    build_qr_image(cookie_str).save(buf, format="PNG")
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    html = (
+        "<!doctype html><html><head><meta charset='utf-8'>"
+        "<title>扫码获取 Cookie</title></head>"
+        "<body style='margin:0;min-height:100vh;display:flex;align-items:center;"
+        "justify-content:center;flex-direction:column;background:#fff;"
+        "font-family:\"Microsoft YaHei\",sans-serif'>"
+        "<p style='font-size:22px;color:#111'>扫描此二维码获取 Cookie</p>"
+        f"<img src='data:image/png;base64,{b64}' style='max-width:92vw;max-height:82vh' "
+        "alt='Cookie 二维码'>"
+        "</body></html>"
+    )
+    page = await context.new_page()
+    await page.set_content(html)
 
 
 async def capture_cookie() -> str | None:
@@ -245,8 +283,21 @@ async def capture_cookie() -> str | None:
                 with open(COOKIE_FILE, "w", encoding="utf-8") as f:
                     f.write(cookie_str)
                 print(f"Cookie 已保存到 {COOKIE_FILE}")
-                # 二维码容量有限，只编码登录关键字段（App 识别登录态足够）
-                show_qr(qr_cookie_str_from_list(cookies))
+
+                # 展示二维码：优先在已打开的浏览器里弹新标签直接显示（最稳，不依赖系统
+                # 图片查看器），同时保存 PNG 文件留存；浏览器弹出失败时回退系统方式打开。
+                qr_str = qr_cookie_str_from_list(cookies)  # 容量有限，只编码登录关键字段
+                save_qr(qr_str)
+                print(f"✅ 二维码已生成：{QR_IMAGE_PATH}")
+                try:
+                    await _popup_qr_in_browser(context, qr_str)
+                    print("   二维码已弹出到浏览器新标签页，请用 App 内「📷 扫码获取 Cookie」扫描。")
+                except Exception:
+                    print("   浏览器内弹出失败，尝试用系统方式打开图片…")
+                    if try_open_image():
+                        print("   已自动打开，请用 App 内「📷 扫码获取 Cookie」扫描。")
+                    else:
+                        print(f"   系统未能自动打开图片，请到 {QR_IMAGE_PATH} 手动打开后扫码。")
                 input("\n按回车键关闭浏览器并退出...")
                 await browser.close()
                 return cookie_str
