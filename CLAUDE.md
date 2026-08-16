@@ -217,3 +217,17 @@ FetchActivity 支持两种模式（`EXTRA_MODE`，默认 `self`）：
    - kick 合并（`kickPending`）、FINISH 幂等（`if (finished) return`）、teardown（`finishFetch`/`onDestroy` 均 `removeCallbacksAndMessages(null)`）。
    - JS 常量（`HOOK_JS` 等 5 个）未改动；JVM 单测（30）+ JS 测试（13）全绿。**改 JS 常量后务必重跑 js-tests**。
    - 待真机验证：`EVENT_SCROLL_DELAY_MS` 若太激进导致翻页不稳定，可调大（如 600~800ms），看门狗会兜底。
+
+### 交接记录（2026-08-16）：分享链接拉起 + v.douyin.com 短链结论
+
+**1. 分享后自动拉起「抖音精选」打开视频——用私有 scheme 直达，不用 App Link**
+
+- 背景：主抖音注册了 `www.douyin.com` 的 App Link，系统打开方式里永远只有主抖音；抖音精选（`com.ss.android.yumme.video`，原青桃视频）**没有注册**，所以无论系统解析还是 WebView 加载页面都唤不出它。
+- 方案：抖音精选私有 scheme **`snssdk568863://aweme/detail/{id}`**（appid=568863 从设备 LibChecker dump 确认，`adb shell dumpsys package com.ss.android.yumme.video` 可见 `snssdk568863://elder/setting`）。
+- `MainActivity.openVideoInApp` 降级链：① 抖音精选 scheme（`JINGXUAN_SCHEME` 常量）→ ② 主抖音 `snssdk1128://aweme/detail/{id}` → ③ 系统解析网页链接。待真机确认 `aweme/detail/{id}` 是抖音精选的视频路由（否则降级到主抖音，需从 LibChecker 补正确路由）。
+
+**2. v.douyin.com 短链结论（正式封死）**
+
+- 用 `test_direct_api.py` 的「分享短链探测」（`probe_short_link` 纯函数 + 5 单测）实测：listcollection 响应**没有 `v.douyin.com` 短链**，只有 `iesdouyin.com/share/video/{id}/...` 长分享链接（带 u_code/did/share_sign 跟踪参数）。
+- `v.douyin.com` 短链只能由抖音服务端生成（`convert_video_id` 等，要 a_bogus + 浏览器 TLS 指纹），两条路均已实测走不通（403 ArgusSecurityPlugin / 404 Janus）。**不要尝试再走短链**。
+- 结论：分享链接保持 `https://www.douyin.com/video/{id}`，抖音精选识别靠 ① 的 scheme 直接拉起，不依赖剪贴板口令。
