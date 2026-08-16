@@ -175,7 +175,14 @@ class MainActivity : AppCompatActivity() {
         }
         val item = favs.random()
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("抖音分享链接", item.url))
+        // 抖音系 App（含抖音精选）通过剪贴板监听识别分享口令：文本内包含
+        // douyin.com 链接即可触发弹窗。采用官方口令的文本结构，识别率最高。
+        val shareText = buildString {
+            append("复制打开抖音精选，看看TA的作品 ")
+            append(item.url)
+            append(" 复制此链接，打开抖音精选，直接观看视频！")
+        }
+        clipboard.setPrimaryClip(ClipData.newPlainText("抖音分享链接", shareText))
 
         binding.tvShareResult.text = buildString {
             append("✅ 已复制：").append(item.url)
@@ -186,8 +193,9 @@ class MainActivity : AppCompatActivity() {
                 append("\n作者：").append(item.author)
             }
         }
-        Toast.makeText(this, "已复制链接到剪贴板", Toast.LENGTH_SHORT).show()
-        // 自动拉起「抖音精选」（优先）打开该视频
+        Toast.makeText(this, "已复制分享口令到剪贴板", Toast.LENGTH_SHORT).show()
+        // 自动拉起「抖音精选」（优先）打开该视频；即使拉起失败，
+        // 用户手动打开抖音精选时也会自动识别剪贴板口令弹窗。
         openVideoInApp(item.url)
     }
 
