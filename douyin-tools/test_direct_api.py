@@ -313,6 +313,21 @@ async def _main(bundle):
         print(f"  ✅ 捕获到真实请求：{redact_url(req.url)}")
         print(f"  [浏览器内] HTTP {resp.status} | body[:300]: {body1[:300]!r}")
 
+        # [分享短链探测] 关键取证：listcollection 响应是否自带 v.douyin.com 短链？
+        #   若有，Android 端抓取时直接提取即可，完全不需要 a_bogus 转短链。
+        try:
+            _data = json.loads(body1)
+            _first = (_data.get("aweme_list") or [{}])[0]
+            _si = ((_first.get("share_info") or {}).get("share_url") or "").strip()
+            _su = (_first.get("share_url") or "").strip()
+            _hint = ("自带 v.douyin.com 短链 ✅" if "v.douyin.com" in (_si + _su)
+                     else ("有 share 字段但非短链" if (_si or _su) else "无 share_url 字段 ✗"))
+            print(f"  [分享短链探测] share_info.share_url = {_si!r}")
+            print(f"                  share_url          = {_su!r}")
+            print(f"                  → {_hint}")
+        except Exception as e:
+            print(f"  [分享短链探测] 解析失败：{e}")
+
         # 探测「页内直连翻页」的核心机制（Android 实现的关键取证）：
         #   构造无签名、max_cursor=20 的探测 URL，然后分别验证两条路：
         #   1) 手动调 byted_acrawler.frontierSign 生成新 a_bogus（新版签名入口）
