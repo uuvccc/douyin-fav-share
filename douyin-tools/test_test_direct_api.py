@@ -171,6 +171,48 @@ class GzipMaybeTest(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# probe_short_link（分享短链探测）
+# ---------------------------------------------------------------------------
+
+class ProbeShortLinkTest(unittest.TestCase):
+    def test_detects_share_info_short(self):
+        body = json.dumps({"aweme_list": [
+            {"aweme_id": "1", "share_info": {"share_url": "https://v.douyin.com/AbCdEf/"}}
+        ], "has_more": False})
+        r = mod.probe_short_link(body)
+        self.assertTrue(r["has_short"])
+        self.assertEqual(r["share_info_share_url"], "https://v.douyin.com/AbCdEf/")
+        self.assertEqual(r["count"], 1)
+
+    def test_detects_top_level_share_url(self):
+        body = json.dumps({"aweme_list": [
+            {"aweme_id": "1", "share_url": "https://v.douyin.com/XyZ123/"}
+        ]})
+        r = mod.probe_short_link(body)
+        self.assertTrue(r["has_short"])
+        self.assertEqual(r["share_url"], "https://v.douyin.com/XyZ123/")
+
+    def test_long_link_is_not_short(self):
+        body = json.dumps({"aweme_list": [
+            {"aweme_id": "1", "share_info": {"share_url": "https://www.douyin.com/video/1"}}
+        ]})
+        r = mod.probe_short_link(body)
+        self.assertFalse(r["has_short"])
+        self.assertNotEqual(r["share_info_share_url"], "")
+
+    def test_missing_fields(self):
+        r = mod.probe_short_link('{"aweme_list":[{"aweme_id":"1","desc":"x"}]}')
+        self.assertFalse(r["has_short"])
+        self.assertEqual(r["share_info_share_url"], "")
+        self.assertEqual(r["share_url"], "")
+
+    def test_empty_list(self):
+        r = mod.probe_short_link('{"aweme_list":[],"has_more":false}')
+        self.assertEqual(r["count"], 0)
+        self.assertFalse(r["has_short"])
+
+
+# ---------------------------------------------------------------------------
 # http_get（本地 mock server）
 # ---------------------------------------------------------------------------
 

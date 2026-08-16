@@ -184,6 +184,29 @@ def _decode_body(b: bytes) -> str:
     return b.decode("utf-8", errors="replace")
 
 
+def probe_short_link(body: str) -> dict:
+    """解析 listcollection 响应，检查是否自带 v.douyin.com 短链。
+
+    若自带，Android 端抓取时直接提取即可，完全不需要 a_bogus 转短链。
+    """
+    import json
+    data = json.loads(body)
+    lst = data.get("aweme_list") or []
+    first = lst[0] if lst else {}
+    si = ((first.get("share_info") or {}).get("share_url") or "").strip()
+    su = (first.get("share_url") or "").strip()
+    has_short = any(
+        "v.douyin.com" in ((((a.get("share_info") or {}).get("share_url") or "") + " " + (a.get("share_url") or "")))
+        for a in lst
+    )
+    return {
+        "count": len(lst),
+        "share_info_share_url": si,
+        "share_url": su,
+        "has_short": has_short,
+    }
+
+
 # ---------------------------------------------------------------------------
 # HTTP 重放
 # ---------------------------------------------------------------------------
@@ -316,14 +339,13 @@ async def _main(bundle):
         # [分享短链探测] 关键取证：listcollection 响应是否自带 v.douyin.com 短链？
         #   若有，Android 端抓取时直接提取即可，完全不需要 a_bogus 转短链。
         try:
-            _data = json.loads(body1)
-            _first = (_data.get("aweme_list") or [{}])[0]
-            _si = ((_first.get("share_info") or {}).get("share_url") or "").strip()
-            _su = (_first.get("share_url") or "").strip()
-            _hint = ("自带 v.douyin.com 短链 ✅" if "v.douyin.com" in (_si + _su)
-                     else ("有 share 字段但非短链" if (_si or _su) else "无 share_url 字段 ✗"))
-            print(f"  [分享短链探测] share_info.share_url = {_si!r}")
-            print(f"                  share_url          = {_su!r}")
+            _p = probe_short_link(body1)
+            _hint = ("自带 v.douyin.com 短链 ✅" if _p["has_short"]
+                     else ("有 share 字段但非短链" if (_p["share_info_share_url"] or _p["share_url"]) else "无 share_url 字段 ✗"))
+            print(f"  [分享短链探测] aweme_list 共 {_p['count']} 条")
+            print(f"                  首条 share_info.share_url = {_p['share_info_share_url']!r}")
+            print(f"                  首条 share_url            = {_p['share_url']!r}")
+            print(f"                  任意一条含 v.douyin.com   = {_p['has_short']}")
             print(f"                  → {_hint}")
         except Exception as e:
             print(f"  [分享短链探测] 解析失败：{e}")
