@@ -204,6 +204,16 @@ FetchActivity 支持两种模式（`EXTRA_MODE`，默认 `self`）：
 
 **使用**：F: 机器 `git pull` 后 `douyin-tools/.venv/Scripts/python test_direct_api.py`，把三段输出 + VERDICT 贴回分析。**该脚本是有 cookie 的机器才能跑完**（本机无 cookie，只做了单测/自测）。暂未加入 CI（一次性诊断工具，非生产代码）。
 
-**待实测后决策（Phase 2）**：
-- 若直连通 → 直连抓取器：PC 端 Python 先验证，再评估 App 端（隐藏 WebView 跑签名 JS + OkHttp 直连；**Android OkHttp 的 TLS 指纹与 Chrome 不同，需真机再实测**）。签名算法随抖音更新需持续维护。
-- 若失败/不具决定性 → 回退 WebView 事件驱动重构：`CollectionPager` 状态机替代 2.5s 定时滚动（速度 ~3x）。该设计已评审通过，含 4 处必修：teardown 清理定时器 / kick 合并 / FINISH 幂等 / onPageFinished 门控修复（含 self 模式抓取未启动的 bug：`profileLoaded` 仅 guest 模式设置）。
+**最终结论（2026-08-16，F: 机器实测三次后）——纯 HTTP 直连与手动签名页内直连均不可行，已落地事件驱动翻页**：
+
+1. **纯 HTTP 直连（OkHttp/urllib）死路**：浏览器内真实签名 + 真实 cookie = HTTP 200 + `aweme_list`；同一个 URL 走裸 HTTP 重放 = `404 Unsupported path(Janus)`（与无签名步同响应）。→ 拒绝的是**非浏览器 TLS 指纹**（WAF 边缘按 JA3/HTTP 版本识别），不是签名。Android OkHttp 同理会被拦。
+2. **手动签名页内直连死路**（`test_direct_api.py` 新增两探测）：
+   - 页内裸 `fetch` 无签名 URL → `403 Blocked by ArgusSecurityPlugin Sign Invalid`：**页面不会给注入的 fetch 自动补签名**（签名在 SDK 内部构建完才调 fetch，不在全局拦截层）。
+   - `byted_acrawler.frontierSign({url})` 返回 `{"X-Bogus": ...}`：签名入口是 `frontierSign`，但输出 **X-Bogus**（旧/移动签名体系），而 listcollection 真实请求用 **a_bogus**（URL 参数）——**a_bogus 生成器锁在页面 bundle 闭包里，未暴露全局**，无法外部构造。
+3. **已实现：WebView 事件驱动翻页**（commit 待查，`FetchActivity.kt`）：
+   - 思路：签名锁在页面内部构造不了，就让**页面自己的翻页器生成签名请求**，我们只在「每收到一条 listcollection 响应」后尽快触发下一页——`handleCollection` → `scheduleKick(EVENT_SCROLL_DELAY_MS=400)`，替代固定 2.5s 定时滚动（速度约 3 倍：500 条 ≈ 1~2 分钟 → 20~40 秒）。
+   - 看门狗 `watchdog`（2.5s）：超过该间隔无响应（hook 漏报/渲染未完成）就强制踢一脚，避免卡死。
+   - 修复 **self 模式抓取未启动 bug**：`onPageFinished` 里 `if (!profileLoaded) return` 挡住启动，而 `profileLoaded` 仅 guest 模式 `loadGuestProfile()` 置 true——现 self 模式 `onCreate` 置 `profileLoaded = true`。
+   - kick 合并（`kickPending`）、FINISH 幂等（`if (finished) return`）、teardown（`finishFetch`/`onDestroy` 均 `removeCallbacksAndMessages(null)`）。
+   - JS 常量（`HOOK_JS` 等 5 个）未改动；JVM 单测（30）+ JS 测试（13）全绿。**改 JS 常量后务必重跑 js-tests**。
+   - 待真机验证：`EVENT_SCROLL_DELAY_MS` 若太激进导致翻页不稳定，可调大（如 600~800ms），看门狗会兜底。

@@ -5,6 +5,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
@@ -42,6 +43,11 @@ class FetchActivity : AppCompatActivity() {
     private var emptyRounds = 0
     private var lastCount = 0
     private var domSeeded = false
+
+    /** 事件驱动抓取：是否已启动、是否已排定一次 kick、最近一次响应到达时间。 */
+    private var started = false
+    private var kickPending = false
+    private var lastResponseTime = 0L
 
     /** 访客模式：免登录抓取他人公开收藏。 */
     private var guestMode = false
@@ -84,6 +90,8 @@ class FetchActivity : AppCompatActivity() {
                 "正在打开对方主页的「收藏」Tab 并自动捕获数据…仅限对方开启「公开收藏」，请保持页面可见。"
             startGuest(intent.getStringExtra(EXTRA_GUEST_INPUT)?.trim().orEmpty())
         } else {
+            // self 模式直接打开收藏页，标记已加载以便 onPageFinished 启动抓取
+            profileLoaded = true
             injectCookies()
             binding.webView.loadUrl(FAVORITES_URL)
         }
@@ -115,15 +123,11 @@ class FetchActivity : AppCompatActivity() {
                     scheduleResolve(url)
                     return
                 }
-                // 收藏页加载完成：注入 hook -> 提取首屏 DOM 兜底 -> 开始滚动翻页
+                // 收藏页加载完成：注入 hook -> 提取首屏 DOM 兜底 -> 开始翻页
                 if (!profileLoaded) return
                 handler.postDelayed({
-                    if (!finished) {
-                        injectHook()
-                        seedFromDom()
-                        startScrolling()
-                    }
-                }, 3000)
+                    if (!finished && !started) startFetching()
+                }, START_DELAY_MS)
             }
         }
     }
@@ -272,7 +276,13 @@ class FetchActivity : AppCompatActivity() {
                 }
             }
             updateProgress()
-            if (!hasMore) finishFetch(canceled = false)
+            lastResponseTime = SystemClock.uptimeMillis()
+            if (!hasMore) {
+                finishFetch(canceled = false)
+            } else {
+                // 事件驱动：来一条响应就立即触发下一页（稍等新一页渲染），不再等固定定时器
+                scheduleKick(EVENT_SCROLL_DELAY_MS)
+            }
         } catch (e: Exception) {
             // 忽略解析错误，等待下一轮
         }
@@ -318,31 +328,58 @@ class FetchActivity : AppCompatActivity() {
         }
     }
 
-    private fun startScrolling() {
-        handler.post(scrollTask)
+    /** 启动抓取：注入 hook -> DOM 兜底 -> 踢第一脚 + 挂看门狗。 */
+    private fun startFetching() {
+        if (finished || started) return
+        started = true
+        lastResponseTime = SystemClock.uptimeMillis()
+        injectHook()
+        seedFromDom()
+        kick()
+        handler.postDelayed(watchdog, WATCHDOG_INTERVAL_MS)
     }
 
-    private val scrollTask = object : Runnable {
+    /**
+     * 事件驱动翻页：执行一次滚动触发页面自身签名的 listcollection 请求。
+     * 签名（a_bogus 等）锁在页面内部、外部无法构造（实测 frontierSign 只给 X-Bogus、
+     * 裸 fetch 被 ArgusSecurityPlugin 拒），因此让页面自己的翻页器生成签名请求，
+     * 我们只负责在每次响应到达后尽快触发下一页。
+     */
+    private fun kick() {
+        if (finished) return
+        binding.webView.evaluateJavascript(SCROLL_JS, null)
+
+        if (allItems.size == lastCount) {
+            emptyRounds++
+        } else {
+            emptyRounds = 0
+            lastCount = allItems.size
+        }
+        updateProgress()
+
+        val noDataAtAll = allItems.isEmpty() && emptyRounds >= MAX_EMPTY_ROUNDS_EMPTY
+        val stuck = allItems.isNotEmpty() && emptyRounds >= MAX_EMPTY_ROUNDS
+        if (noDataAtAll || stuck) finishFetch(canceled = false)
+    }
+
+    /** 排定一次 kick；快速到达的多次触发合并为一次，避免滚动堆积。 */
+    private fun scheduleKick(delayMs: Long) {
+        if (finished || kickPending) return
+        kickPending = true
+        handler.postDelayed({
+            kickPending = false
+            kick()
+        }, delayMs)
+    }
+
+    /** 看门狗：超过该间隔未收到响应（hook 漏报 / 渲染未完成）就强制踢一脚，避免卡死。 */
+    private val watchdog = object : Runnable {
         override fun run() {
             if (finished) return
-
-            binding.webView.evaluateJavascript(SCROLL_JS, null)
-
-            if (allItems.size == lastCount) {
-                emptyRounds++
-            } else {
-                emptyRounds = 0
-                lastCount = allItems.size
+            if (SystemClock.uptimeMillis() - lastResponseTime > WATCHDOG_INTERVAL_MS) {
+                scheduleKick(0)
             }
-            updateProgress()
-
-            val noDataAtAll = allItems.isEmpty() && emptyRounds >= 3
-            val stuck = allItems.isNotEmpty() && emptyRounds >= MAX_EMPTY_ROUNDS
-            if (noDataAtAll || stuck) {
-                finishFetch(canceled = false)
-            } else {
-                handler.postDelayed(this, SCROLL_INTERVAL_MS)
-            }
+            handler.postDelayed(this, WATCHDOG_INTERVAL_MS)
         }
     }
 
@@ -355,7 +392,6 @@ class FetchActivity : AppCompatActivity() {
     private fun finishFetch(canceled: Boolean) {
         if (finished) return
         finished = true
-        handler.removeCallbacks(scrollTask)
         handler.removeCallbacksAndMessages(null)
 
         if (allItems.isNotEmpty()) {
@@ -386,8 +422,15 @@ class FetchActivity : AppCompatActivity() {
 
         private const val FAVORITES_URL =
             "https://www.douyin.com/user/self?showTab=favorite_collection"
-        private const val SCROLL_INTERVAL_MS = 2500L
+        /** 收藏页加载完成后等待首屏渲染再开始抓取。 */
+        private const val START_DELAY_MS = 3000L
+        /** 收到一条响应后等待新一页渲染再触发下一页。 */
+        private const val EVENT_SCROLL_DELAY_MS = 400L
+        /** 无响应超过该间隔由看门狗强制踢一脚，避免卡死。 */
+        private const val WATCHDOG_INTERVAL_MS = 2500L
         private const val MAX_EMPTY_ROUNDS = 8
+        /** 完全无数据时的空转判定轮数。 */
+        private const val MAX_EMPTY_ROUNDS_EMPTY = 3
         private const val RESOLVE_INTERVAL_MS = 2500L
         private const val MAX_RESOLVE_ATTEMPTS = 6
         private const val DESKTOP_UA =
