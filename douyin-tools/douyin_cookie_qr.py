@@ -23,6 +23,15 @@ import os
 import sys
 import time
 
+# Windows 控制台默认 GBK 编码，打印 emoji/中文可能抛 UnicodeEncodeError；
+# 强制 stdout/stderr 使用 UTF-8，保证各终端下脚本输出稳定。
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 import qrcode
 from PIL import Image, ImageDraw, ImageFont
 # 注意：playwright 在 capture_cookie() 内延迟导入。
@@ -139,16 +148,37 @@ def build_qr_image(cookie_str: str) -> Image.Image:
 
 
 def show_qr(cookie_str: str) -> str:
-    """保存二维码图片到 ~/.douyin_cookie_qr.png 并自动打开，返回图片路径。"""
+    """保存二维码图片到 ~/.douyin_cookie_qr.png 并自动打开，返回图片路径。
+
+    图片始终会保存成功；若系统未关联图片查看器导致无法自动打开，
+    会回退用资源管理器打开所在目录，并提示手动打开图片。
+    """
     img = build_qr_image(cookie_str)
     img.save(QR_IMAGE_PATH)
+    opened = False
     if sys.platform == "darwin":
-        os.system(f"open {QR_IMAGE_PATH}")
+        if os.system(f"open {QR_IMAGE_PATH}") == 0:
+            opened = True
     elif sys.platform == "win32":
-        os.startfile(QR_IMAGE_PATH)  # noqa: S606 (Windows 打开图片的惯用方式)
+        try:
+            os.startfile(QR_IMAGE_PATH)  # noqa: S606 (Windows 打开图片的惯用方式)
+            opened = True
+        except OSError:
+            # 系统未关联 .png 默认查看器时 os.startfile 抛 OSError，
+            # 回退用资源管理器打开所在目录，用户可自行双击图片。
+            try:
+                os.startfile(os.path.dirname(QR_IMAGE_PATH))
+            except OSError:
+                pass
     else:
-        os.system(f"xdg-open {QR_IMAGE_PATH}")
-    print(f"✅ 二维码已生成并打开：{QR_IMAGE_PATH}")
+        if os.system(f"xdg-open {QR_IMAGE_PATH}") == 0:
+            opened = True
+
+    print(f"✅ 二维码已生成：{QR_IMAGE_PATH}")
+    if opened:
+        print("   已自动打开，请用 App 内「📷 扫码获取 Cookie」扫描。")
+    else:
+        print("   系统未能自动打开图片，请到上述路径手动打开后扫码。")
     return QR_IMAGE_PATH
 
 
