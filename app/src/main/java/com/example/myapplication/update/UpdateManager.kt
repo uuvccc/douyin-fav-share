@@ -38,7 +38,22 @@ class UpdateManager(private val appContext: Context) {
         fun onDownloadProgress(percent: Int)
         fun onDownloadDone(file: File)
         fun onDownloadError(message: String)
+
+        /** 下载被用户取消（默认空实现，方便只关心部分回调的调用方）。 */
+        fun onDownloadCancelled() {}
     }
+
+    // 下载取消标志：cancelDownload() 置位后，下载线程在下一个读块处终止并清理半成品。
+    @Volatile
+    private var cancelRequested = false
+
+    /** 取消正在进行的下载。已在下载中调用才有效；幂等，可安全重复调用。 */
+    fun cancelDownload() {
+        cancelRequested = true
+    }
+
+    /** 下载被用户主动取消时抛出，用于区分「取消」与「网络/镜像失败」。 */
+    private class DownloadCancelledException : IOException()
 
     // 公开的 GitHub 代理/镜像（按顺序重试；"" 表示直连）。
     // 失效时可将失效项从列表移除，或自行增补新镜像。
@@ -115,9 +130,14 @@ class UpdateManager(private val appContext: Context) {
 
     /** 异步下载并安装 Release 的 APK。 */
     fun downloadAndInstall(info: ReleaseInfo, listener: Listener) {
+        cancelRequested = false
         Thread {
             var lastErr = ""
             for (m in mirrors) {
+                if (cancelRequested) {
+                    post { listener.onDownloadCancelled() }
+                    return@Thread
+                }
                 try {
                     val url = m + info.assetUrl
                     val file = download(url, info.assetName) { pct ->
@@ -127,6 +147,9 @@ class UpdateManager(private val appContext: Context) {
                         post { listener.onDownloadDone(file) }
                         return@Thread
                     }
+                } catch (e: DownloadCancelledException) {
+                    post { listener.onDownloadCancelled() }
+                    return@Thread
                 } catch (e: Exception) {
                     lastErr = e.message ?: "下载失败"
                 }
@@ -147,20 +170,27 @@ class UpdateManager(private val appContext: Context) {
             val total = conn.contentLengthLong
             val dir = File(appContext.filesDir, "updates").apply { mkdirs() }
             val target = File(dir, fileName)
-            conn.inputStream.use { input ->
-                FileOutputStream(target).use { out ->
-                    val buf = ByteArray(8192)
-                    var read: Int
-                    var done = 0L
-                    while (input.read(buf).also { read = it } != -1) {
-                        out.write(buf, 0, read)
-                        done += read
-                        if (total > 0) {
-                            val pct = ((done * 100) / total).toInt().coerceIn(0, 100)
-                            onProgress(pct)
+            try {
+                conn.inputStream.use { input ->
+                    FileOutputStream(target).use { out ->
+                        val buf = ByteArray(8192)
+                        var read: Int
+                        var done = 0L
+                        while (input.read(buf).also { read = it } != -1) {
+                            if (cancelRequested) throw DownloadCancelledException()
+                            out.write(buf, 0, read)
+                            done += read
+                            if (total > 0) {
+                                val pct = ((done * 100) / total).toInt().coerceIn(0, 100)
+                                onProgress(pct)
+                            }
                         }
                     }
                 }
+            } catch (e: DownloadCancelledException) {
+                // 清理下载了一半的文件，避免残留占空间
+                target.delete()
+                throw e
             }
             return target
         } finally {

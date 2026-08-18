@@ -403,6 +403,11 @@ class MainActivity : AppCompatActivity() {
             .setTitle("正在下载更新…")
             .setView(layout)
             .setCancelable(false)
+            .setNegativeButton("取消") { _, _ ->
+                updateManager.cancelDownload()
+                dismissProgressDialog()
+                Toast.makeText(this, "已取消更新", Toast.LENGTH_SHORT).show()
+            }
             .show()
     }
 
